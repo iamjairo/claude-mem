@@ -1,0 +1,60 @@
+# Lightweight single-user worker stack — SQLite, no Postgres/Valkey.
+#
+# Runs the local worker-service (SQLite-backed) inside a container, exposing
+# it on port 37777. Claude Code hooks on the host detect the running worker via
+# the health endpoint and skip spawning a local process. Claude Desktop's MCP
+# server connects to the same port for memory search.
+#
+# Usage:
+#   1. Set required env vars (copy .env.worker.example to .env.worker):
+#        ANTHROPIC_API_KEY=sk-ant-...
+#        CLAUDE_MEM_DATA_DIR=/absolute/path/on/host   # host-side data directory
+#   2. Start:
+#        docker compose -f docker-compose.worker.yml up -d
+#   3. Point your Claude Code hooks and Claude Desktop MCP server to port 37777:
+#        CLAUDE_MEM_WORKER_HOST=127.0.0.1
+#        CLAUDE_MEM_WORKER_PORT=37777
+#      (Add these to ~/.claude-mem/settings.json or your shell environment)
+#   4. Verify:
+#        curl http://127.0.0.1:37777/healthz
+#
+# The container mounts CLAUDE_MEM_DATA_DIR from the host so the SQLite database
+# and logs are persisted to your machine and survive container restarts.
+#
+# To stop:  docker compose -f docker-compose.worker.yml down
+# To tail logs:  docker compose -f docker-compose.worker.yml logs -f
+
+services:
+  claude-mem-worker:
+    build:
+      context: .
+      dockerfile: docker/claude-mem/Dockerfile
+    # Use shell mode so the entrypoint passes control directly to our command,
+    # bypassing the server-beta startup path entirely.
+    environment:
+      CLAUDE_MEM_CONTAINER_MODE: shell
+      CLAUDE_MEM_DOCKER: "1"
+      CLAUDE_MEM_RUNTIME: worker
+      CLAUDE_MEM_QUEUE_ENGINE: sqlite
+      CLAUDE_MEM_WORKER_HOST: "0.0.0.0"
+      CLAUDE_MEM_WORKER_PORT: "37777"
+      CLAUDE_MEM_DATA_DIR: /data/claude-mem
+      # Chroma vector search is optional; disable by default to keep startup fast.
+      # Set to "true" if you want semantic search (requires uv/uvx in the image).
+      CLAUDE_MEM_CHROMA_ENABLED: "false"
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY is required}
+    command: ["bun", "/opt/claude-mem/scripts/worker-service.cjs", "--daemon"]
+    ports:
+      - "127.0.0.1:37777:37777"
+    volumes:
+      # Mount the host data directory so the SQLite DB and logs are persisted.
+      - type: bind
+        source: ${CLAUDE_MEM_DATA_DIR:?CLAUDE_MEM_DATA_DIR is required}
+        target: /data/claude-mem
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:37777/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 30s

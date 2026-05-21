@@ -36,8 +36,9 @@ function main() {
     console.log(`Observation "${dup.title.substring(0, 60)}..."`);
     console.log(`  Found ${dup.count} copies, keeping ID ${keepId}, deleting ${deleteIds.length} duplicates`);
 
-    const deleteStmt = db['db'].prepare(`DELETE FROM observations WHERE id IN (${deleteIds.join(',')})`);
-    deleteStmt.run();
+    const placeholders = deleteIds.map(() => '?').join(',');
+    const deleteStmt = db['db'].prepare(`DELETE FROM observations WHERE id IN (${placeholders})`);
+    deleteStmt.run(...deleteIds);
     deletedObs += deleteIds.length;
   }
 
@@ -70,8 +71,9 @@ function main() {
     console.log(`Summary "${dup.request.substring(0, 60)}..."`);
     console.log(`  Found ${dup.count} copies, keeping ID ${keepId}, deleting ${deleteIds.length} duplicates`);
 
-    const deleteStmt = db['db'].prepare(`DELETE FROM session_summaries WHERE id IN (${deleteIds.join(',')})`);
-    deleteStmt.run();
+    const placeholders = deleteIds.map(() => '?').join(',');
+    const deleteStmt = db['db'].prepare(`DELETE FROM session_summaries WHERE id IN (${placeholders})`);
+    deleteStmt.run(...deleteIds);
     deletedSum += deleteIds.length;
   }
 

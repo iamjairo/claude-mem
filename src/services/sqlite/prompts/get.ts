@@ -118,12 +118,13 @@ export function getUserPromptsByIds(
 
   const { orderBy = 'date_desc', limit, project } = options;
   const orderClause = orderBy === 'date_asc' ? 'ASC' : 'DESC';
-  const limitClause = limit ? `LIMIT ${limit}` : '';
+  const limitClause = limit ? 'LIMIT ?' : '';
   const placeholders = ids.map(() => '?').join(',');
   const params: (number | string)[] = [...ids];
 
   const projectFilter = project ? 'AND s.project = ?' : '';
   if (project) params.push(project);
+  if (limit) params.push(limit);
 
   const stmt = db.prepare(`
     SELECT

@@ -1447,7 +1447,7 @@ export class SessionStore {
     const { orderBy = 'date_desc', limit, project, type, concepts, files } = options;
     const preserveIdOrder = orderBy === 'relevance';
     const orderClause = preserveIdOrder ? '' : `ORDER BY created_at_epoch ${orderBy === 'date_asc' ? 'ASC' : 'DESC'}`;
-    const limitClause = limit ? `LIMIT ${limit}` : '';
+    const limitClause = limit ? 'LIMIT ?' : '';
 
     const placeholders = ids.map(() => '?').join(',');
     const params: any[] = [...ids];
@@ -1488,6 +1488,8 @@ export class SessionStore {
       });
       additionalConditions.push(`(${fileConditions.join(' OR ')})`);
     }
+
+    if (limit) params.push(limit);
 
     const whereClause = additionalConditions.length > 0
       ? `WHERE id IN (${placeholders}) AND ${additionalConditions.join(' AND ')}`
@@ -2105,7 +2107,7 @@ export class SessionStore {
     const { orderBy = 'date_desc', limit, project } = options;
     const preserveIdOrder = orderBy === 'relevance';
     const orderClause = preserveIdOrder ? '' : `ORDER BY created_at_epoch ${orderBy === 'date_asc' ? 'ASC' : 'DESC'}`;
-    const limitClause = limit ? `LIMIT ${limit}` : '';
+    const limitClause = limit ? 'LIMIT ?' : '';
     const placeholders = ids.map(() => '?').join(',');
     const params: any[] = [...ids];
 
@@ -2113,6 +2115,7 @@ export class SessionStore {
       ? `WHERE id IN (${placeholders}) AND project = ?`
       : `WHERE id IN (${placeholders})`;
     if (project) params.push(project);
+    if (limit) params.push(limit);
 
     const stmt = this.db.prepare(`
       SELECT * FROM session_summaries
@@ -2137,12 +2140,13 @@ export class SessionStore {
     const { orderBy = 'date_desc', limit, project } = options;
     const preserveIdOrder = orderBy === 'relevance';
     const orderClause = preserveIdOrder ? '' : `ORDER BY up.created_at_epoch ${orderBy === 'date_asc' ? 'ASC' : 'DESC'}`;
-    const limitClause = limit ? `LIMIT ${limit}` : '';
+    const limitClause = limit ? 'LIMIT ?' : '';
     const placeholders = ids.map(() => '?').join(',');
     const params: any[] = [...ids];
 
     const projectFilter = project ? 'AND s.project = ?' : '';
     if (project) params.push(project);
+    if (limit) params.push(limit);
 
     const stmt = this.db.prepare(`
       SELECT

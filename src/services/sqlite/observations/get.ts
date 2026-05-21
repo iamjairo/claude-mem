@@ -23,7 +23,7 @@ export function getObservationsByIds(
 
   const { orderBy = 'date_desc', limit, project, type, concepts, files } = options;
   const orderClause = orderBy === 'date_asc' ? 'ASC' : 'DESC';
-  const limitClause = limit ? `LIMIT ${limit}` : '';
+  const limitClause = limit ? 'LIMIT ?' : '';
 
   const placeholders = ids.map(() => '?').join(',');
   const params: any[] = [...ids];
@@ -64,6 +64,8 @@ export function getObservationsByIds(
     });
     additionalConditions.push(`(${fileConditions.join(' OR ')})`);
   }
+
+  if (limit) params.push(limit);
 
   const whereClause = additionalConditions.length > 0
     ? `WHERE id IN (${placeholders}) AND ${additionalConditions.join(' AND ')}`

@@ -298,7 +298,7 @@ export class WorkerService implements WorkerRef {
     logger.info('SYSTEM', 'Worker started', { host, port, pid: process.pid });
 
     this.initializeBackground().catch((error) => {
-      logger.error('SYSTEM', 'Background initialization failed', {}, error as Error);
+      logger.error('SYSTEM', 'Background initialization failed', {}, error instanceof Error ? error : new Error(String(error)));
     });
   }
 
@@ -418,7 +418,7 @@ export class WorkerService implements WorkerRef {
 
       return;
     } catch (error) {
-      logger.error('SYSTEM', 'Background initialization failed', {}, error instanceof Error ? error : undefined);
+      logger.error('SYSTEM', 'Background initialization failed', {}, error instanceof Error ? error : new Error(String(error)));
     }
   }
 
@@ -436,17 +436,21 @@ export class WorkerService implements WorkerRef {
       const MCP_INIT_TIMEOUT_MS = 60000;
       const mcpConnectionPromise = this.mcpClient.connect(transport);
 
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(
+        timeoutId = setTimeout(
           () => reject(new Error('MCP connection timeout')),
           MCP_INIT_TIMEOUT_MS
         );
       });
 
-      await Promise.race([mcpConnectionPromise, timeoutPromise]);
-      logger.info('WORKER', 'MCP loopback self-check connected successfully');
-
-      await transport.close();
+      try {
+        await Promise.race([mcpConnectionPromise, timeoutPromise]);
+        logger.info('WORKER', 'MCP loopback self-check connected successfully');
+      } finally {
+        clearTimeout(timeoutId);
+        await transport.close().catch(() => {});
+      }
     } catch (error) {
       logger.warn('WORKER', 'MCP loopback self-check failed', { 
         error: error instanceof Error ? error.message : String(error) 
@@ -534,6 +538,7 @@ export class WorkerService implements WorkerRef {
       }
     } catch {
       // If the classifier itself throws, fall back to unclassified.
+      logger.warn('WORKER', 'Provider classifier threw — falling back to unclassified error');
     }
     return null;
   }
@@ -1180,8 +1185,8 @@ async function main() {
         });
       });
       process.on('uncaughtException', (error) => {
-        logger.error('SYSTEM', 'Uncaught exception in daemon', {}, error as Error);
-        // Don't exit — keep the HTTP server running
+        logger.error('SYSTEM', 'Uncaught exception in daemon', {}, error);
+        process.exit(1);
       });
 
       const worker = new WorkerService();
@@ -1196,7 +1201,7 @@ async function main() {
         }
         logger.failure('SYSTEM', 'Worker failed to start', {}, error as Error);
         removePidFile();
-        process.exit(0);
+        process.exit(1);
       });
     }
   }
