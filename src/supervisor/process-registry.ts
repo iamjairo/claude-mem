@@ -46,11 +46,72 @@ export function isPidAlive(pid: number): boolean {
   }
 }
 
+// Poll until every record's pid is gone or the timeout elapses. Shared by the
+// reapSession wait phase and shutdown.ts's SIGTERM grace period.
+export async function waitForExit(records: ManagedProcessRecord[], timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (records.every(record => !isPidAlive(record.pid))) {
+      return;
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+}
+
 export interface PidInfo {
   pid: number;
   port: number;
   startedAt: string;
   startToken?: string;
+}
+
+// Windows lacks a cheap /proc-style start-time read and `ps lstart`, so we
+// shell to PowerShell's CIM (wmic is removed on Windows 11). The lookup is
+// ~100-300ms, so cache per-pid for 5s to avoid re-shelling when the same PID
+// is validated repeatedly within one spawn-decision window.
+const WINDOWS_START_TOKEN_CACHE_TTL_MS = 5_000;
+const windowsStartTokenCache = new Map<number, { token: string | null; capturedAtMs: number }>();
+
+function captureWindowsStartToken(pid: number): string | null {
+  const cached = windowsStartTokenCache.get(pid);
+  if (cached && Date.now() - cached.capturedAtMs < WINDOWS_START_TOKEN_CACHE_TTL_MS) {
+    return cached.token;
+  }
+
+  let token: string | null = null;
+  try {
+    // CreationDate is a CIM DATETIME (yyyyMMddHHmmss.ffffff±UTCoffset) that is
+    // unique-enough per (pid, boot) to detect PID reuse. `-NoProfile` keeps it
+    // fast; sanitizeEnv keeps the spawn-env discipline uniform (#2357/#2375).
+    const result = spawnSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `(Get-CimInstance Win32_Process -Filter \"ProcessId=${pid}\").CreationDate.ToString('yyyyMMddHHmmss.ffffff')`
+      ],
+      {
+        encoding: 'utf-8',
+        timeout: 5000,
+        windowsHide: true,
+        env: { ...sanitizeEnv(process.env), LC_ALL: 'C', LANG: 'C' }
+      }
+    );
+    if (result.status === 0) {
+      const trimmed = result.stdout.trim();
+      token = trimmed.length > 0 ? trimmed : null;
+    }
+  } catch (error: unknown) {
+    logger.debug('SYSTEM', 'captureProcessStartToken: powershell CIM lookup failed', {
+      pid,
+      error: error instanceof Error ? error.message : String(error)
+    });
+    token = null;
+  }
+
+  windowsStartTokenCache.set(pid, { token, capturedAtMs: Date.now() });
+  return token;
 }
 
 export function captureProcessStartToken(pid: number): string | null {
@@ -74,14 +135,16 @@ export function captureProcessStartToken(pid: number): string | null {
   }
 
   if (process.platform === 'win32') {
-    return null;
+    return captureWindowsStartToken(pid);
   }
 
   try {
     const result = spawnSync('ps', ['-p', String(pid), '-o', 'lstart='], {
       encoding: 'utf-8',
       timeout: 2000,
-      env: { ...process.env, LC_ALL: 'C', LANG: 'C' }
+      // Uniform spawn-env discipline: sanitize even for read-only system
+      // binaries so the spawn-env CI check stays a single rule (#2357/#2375).
+      env: { ...sanitizeEnv(process.env), LC_ALL: 'C', LANG: 'C' }
     });
     if (result.status !== 0) return null;
     const token = result.stdout.trim();
@@ -273,12 +336,7 @@ export class ProcessRegistry {
       }
     }
 
-    const deadline = Date.now() + REAP_SESSION_SIGTERM_TIMEOUT_MS;
-    while (Date.now() < deadline) {
-      const survivors = aliveRecords.filter(r => isPidAlive(r.pid));
-      if (survivors.length === 0) break;
-      await new Promise(resolve => setTimeout(resolve, 100));
-    }
+    await waitForExit(aliveRecords, REAP_SESSION_SIGTERM_TIMEOUT_MS);
 
     const survivors = aliveRecords.filter(r => isPidAlive(r.pid));
     for (const record of survivors) {
@@ -585,9 +643,17 @@ export function spawnSdkProcess(
   const pid = child.pid;
   const pgid = pid; 
 
+  // Keep the tail of stderr so a non-zero exit can say WHY at WARN level.
+  // Without this, a CLI that dies at flag parsing ("error: unknown option…")
+  // logs only an opaque {code=1} and the real cause is invisible unless the
+  // worker happens to run at DEBUG.
+  const STDERR_TAIL_MAX_CHARS = 2048;
+  let stderrTail = '';
   if (child.stderr) {
     child.stderr.on('data', (data: Buffer) => {
-      logger.debug('SDK_SPAWN', `[session-${sessionDbId}] stderr: ${data.toString().trim()}`);
+      const text = data.toString();
+      stderrTail = (stderrTail + text).slice(-STDERR_TAIL_MAX_CHARS);
+      logger.debug('SDK_SPAWN', `[session-${sessionDbId}] stderr: ${text.trim()}`);
     });
   }
 
@@ -600,11 +666,22 @@ export function spawnSdkProcess(
     pgid,
   }, child);
 
-  child.on('exit', (code: number | null, signal: string | null) => {
-    if (code !== 0) {
-      logger.warn('SDK_SPAWN', `[session-${sessionDbId}] Claude process exited`, { code, signal, pid });
-    }
+  child.on('exit', () => {
     registry.unregister(recordId);
+  });
+
+  // 'close', not 'exit': 'exit' can fire while piped stderr still holds
+  // buffered data, truncating the tail. 'close' waits for all stdio to drain.
+  child.on('close', (code: number | null, signal: string | null) => {
+    if (code !== 0) {
+      const tail = stderrTail.trim();
+      logger.warn('SDK_SPAWN', `[session-${sessionDbId}] Claude process exited`, {
+        code,
+        signal,
+        pid,
+        ...(tail ? { stderrTail: tail } : {}),
+      });
+    }
   });
 
   if (!child.stdin || !child.stdout || !child.stderr) {

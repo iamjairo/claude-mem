@@ -2,30 +2,23 @@
 import path from 'path';
 import { homedir } from 'os';
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from 'fs';
-import { exec } from 'child_process';
-import { promisify } from 'util';
 import { logger } from '../../utils/logger.js';
 import { getWorkerPort, workerHttpRequest } from '../../shared/worker-utils.js';
-import { DATA_DIR, MARKETPLACE_ROOT, CLAUDE_CONFIG_DIR } from '../../shared/paths.js';
+import { DATA_DIR } from '../../shared/paths.js';
 import {
   readCursorRegistry as readCursorRegistryFromFile,
   writeCursorRegistry as writeCursorRegistryToFile,
   writeContextFile,
   type CursorProjectRegistry
 } from '../../utils/cursor-utils.js';
-import type { CursorInstallTarget, CursorHooksJson, CursorMcpConfig, Platform } from './types.js';
-
-const execAsync = promisify(exec);
+import type { CursorInstallTarget, CursorHooksJson, CursorMcpConfig } from './types.js';
+import {
+  getMcpServerAbsolutePath,
+  getWorkerServiceAbsolutePath,
+  getBunAbsolutePath,
+} from './install-paths.js';
 
 const CURSOR_REGISTRY_FILE = path.join(DATA_DIR, 'cursor-projects.json');
-
-export function detectPlatform(): Platform {
-  return process.platform === 'win32' ? 'windows' : 'unix';
-}
-
-export function getScriptExtension(): string {
-  return detectPlatform() === 'windows' ? '.ps1' : '.sh';
-}
 
 export function readCursorRegistry(): CursorProjectRegistry {
   return readCursorRegistryFromFile(CURSOR_REGISTRY_FILE);
@@ -81,52 +74,20 @@ export async function updateCursorContextForProject(projectName: string, _port: 
   }
 }
 
+// Thin re-export wrappers over the centralized Rule B helpers in
+// install-paths.ts. Kept for one release cycle because WindsurfHooksInstaller,
+// GeminiCliHooksInstaller, and McpIntegrations import these names. New code
+// should import directly from install-paths.ts.
 export function findMcpServerPath(): string | null {
-  const possiblePaths = [
-    path.join(MARKETPLACE_ROOT, 'plugin', 'scripts', 'mcp-server.cjs'),
-    path.join(process.cwd(), 'plugin', 'scripts', 'mcp-server.cjs'),
-  ];
-
-  for (const p of possiblePaths) {
-    if (existsSync(p)) {
-      return p;
-    }
-  }
-  return null;
+  return getMcpServerAbsolutePath();
 }
 
 export function findWorkerServicePath(): string | null {
-  const possiblePaths = [
-    path.join(MARKETPLACE_ROOT, 'plugin', 'scripts', 'worker-service.cjs'),
-    path.join(process.cwd(), 'plugin', 'scripts', 'worker-service.cjs'),
-  ];
-
-  for (const p of possiblePaths) {
-    if (existsSync(p)) {
-      return p;
-    }
-  }
-  return null;
+  return getWorkerServiceAbsolutePath();
 }
 
 export function findBunPath(): string {
-  const possiblePaths = [
-    path.join(homedir(), '.bun', 'bin', 'bun'),
-    '/usr/local/bin/bun',
-    '/usr/bin/bun',
-    ...(process.platform === 'win32' ? [
-      path.join(homedir(), '.bun', 'bin', 'bun.exe'),
-      path.join(process.env.LOCALAPPDATA || '', 'bun', 'bun.exe'),
-    ] : []),
-  ];
-
-  for (const p of possiblePaths) {
-    if (p && existsSync(p)) {
-      return p;
-    }
-  }
-
-  return 'bun';
+  return getBunAbsolutePath();
 }
 
 export function getTargetDir(target: CursorInstallTarget): string | null {
@@ -511,28 +472,6 @@ export function checkCursorHooksStatus(): number {
   }
 
   return 0;
-}
-
-export async function detectClaudeCode(): Promise<boolean> {
-  try {
-    const { stdout } = await execAsync('which claude || where claude', { timeout: 5000 });
-    if (stdout.trim()) {
-      return true;
-    }
-  } catch (error) {
-    if (error instanceof Error) {
-      logger.debug('WORKER', 'Claude CLI not in PATH', {}, error);
-    } else {
-      logger.debug('WORKER', 'Claude CLI not in PATH', {}, new Error(String(error)));
-    }
-  }
-
-  const pluginDir = path.join(CLAUDE_CONFIG_DIR, 'plugins');
-  if (existsSync(pluginDir)) {
-    return true;
-  }
-
-  return false;
 }
 
 export async function handleCursorCommand(subcommand: string, args: string[]): Promise<number> {

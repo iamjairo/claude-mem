@@ -3,7 +3,7 @@ import path from 'path';
 import { homedir } from 'os';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { logger } from '../../utils/logger.js';
-import { findMcpServerPath } from './CursorHooksInstaller.js';
+import { getMcpServerAbsolutePath, getNodeAbsolutePath } from './install-paths.js';
 import { readJsonSafe } from '../../utils/json-utils.js';
 import { injectContextIntoMarkdownFile } from '../../utils/context-injection.js';
 
@@ -15,7 +15,7 @@ Use claude-mem's MCP search tools for manual memory queries.`;
 
 function buildMcpServerEntry(mcpServerPath: string): { command: string; args: string[] } {
   return {
-    command: process.execPath,
+    command: getNodeAbsolutePath(),
     args: [mcpServerPath],
   };
 }
@@ -54,7 +54,7 @@ function installMcpIntegration(config: McpInstallerConfig): () => Promise<number
   return async (): Promise<number> => {
     console.log(`\nInstalling Claude-Mem MCP integration for ${config.ideLabel}...\n`);
 
-    const mcpServerPath = findMcpServerPath();
+    const mcpServerPath = getMcpServerAbsolutePath();
     if (!mcpServerPath) {
       console.error('Could not find MCP server script');
       console.error('   Expected at: ~/.claude/plugins/marketplaces/thedotmack/plugin/scripts/mcp-server.cjs');
@@ -172,20 +172,11 @@ function gooseConfigHasClaudeMemEntry(yamlContent: string): boolean {
     yamlContent.includes('mcpServers:');
 }
 
-function buildGooseMcpYamlBlock(mcpServerPath: string): string {
+function buildGooseClaudeMemEntryYaml(mcpServerPath: string, withHeader = false): string {
   return [
-    'mcpServers:',
+    ...(withHeader ? ['mcpServers:'] : []),
     '  claude-mem:',
-    `    command: ${process.execPath}`,
-    '    args:',
-    `      - ${mcpServerPath}`,
-  ].join('\n');
-}
-
-function buildGooseClaudeMemEntryYaml(mcpServerPath: string): string {
-  return [
-    '  claude-mem:',
-    `    command: ${process.execPath}`,
+    `    command: ${getNodeAbsolutePath()}`,
     '    args:',
     `      - ${mcpServerPath}`,
   ].join('\n');
@@ -194,7 +185,7 @@ function buildGooseClaudeMemEntryYaml(mcpServerPath: string): string {
 export async function installGooseMcpIntegration(): Promise<number> {
   console.log('\nInstalling Claude-Mem MCP integration for Goose...\n');
 
-  const mcpServerPath = findMcpServerPath();
+  const mcpServerPath = getMcpServerAbsolutePath();
   if (!mcpServerPath) {
     console.error('Could not find MCP server script');
     console.error('   Expected at: ~/.claude/plugins/marketplaces/thedotmack/plugin/scripts/mcp-server.cjs');
@@ -242,13 +233,13 @@ function mergeGooseYamlConfig(configPath: string, mcpServerPath: string): void {
       writeFileSync(configPath, yamlContent);
       console.log(`  Added claude-mem to existing mcpServers in: ${configPath}`);
     } else {
-      const mcpBlock = '\n' + buildGooseMcpYamlBlock(mcpServerPath) + '\n';
+      const mcpBlock = '\n' + buildGooseClaudeMemEntryYaml(mcpServerPath, true) + '\n';
       yamlContent = yamlContent.trimEnd() + '\n' + mcpBlock;
       writeFileSync(configPath, yamlContent);
       console.log(`  Appended mcpServers section to: ${configPath}`);
     }
   } else {
-    const templateContent = buildGooseMcpYamlBlock(mcpServerPath) + '\n';
+    const templateContent = buildGooseClaudeMemEntryYaml(mcpServerPath, true) + '\n';
     writeFileSync(configPath, templateContent);
     console.log(`  Created config with MCP server: ${configPath}`);
   }

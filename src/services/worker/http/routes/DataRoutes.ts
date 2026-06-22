@@ -66,8 +66,6 @@ const sdkSessionsBatchSchema = z.preprocess((value) => {
   memorySessionIds: stringArrayLike,
 }).passthrough());
 
-const setProcessingSchema = z.object({}).passthrough();
-
 const importSchema = z.object({
   sessions: z.array(z.unknown()).optional(),
   summaries: z.array(z.unknown()).optional(),
@@ -103,7 +101,6 @@ export class DataRoutes extends BaseRouteHandler {
     app.get('/api/projects', this.handleGetProjects.bind(this));
 
     app.get('/api/processing-status', this.handleGetProcessingStatus.bind(this));
-    app.post('/api/processing', validateBody(setProcessingSchema), this.handleSetProcessing.bind(this));
 
     app.post('/api/import', validateBody(importSchema), this.handleImport.bind(this));
   }
@@ -142,8 +139,14 @@ export class DataRoutes extends BaseRouteHandler {
   });
 
   private handleGetObservationsByFile = this.wrapHandler((req: Request, res: Response): void => {
-    const filePath = req.query.path as string | undefined;
-    if (!filePath) {
+    // #2691 — `path` may be repeated (?path=abs&path=rel) to carry multiple
+    // candidate forms (absolute, project-root-relative, cwd-relative) so the
+    // query matches however PostToolUse stored the path. Paths can contain
+    // commas, so we rely on repeated query params rather than comma-splitting.
+    const rawPath = req.query.path;
+    const candidatePaths = (Array.isArray(rawPath) ? rawPath : [rawPath])
+      .filter((p): p is string => typeof p === 'string' && p.length > 0);
+    if (candidatePaths.length === 0) {
       this.badRequest(res, 'path query parameter is required');
       return;
     }
@@ -154,7 +157,7 @@ export class DataRoutes extends BaseRouteHandler {
     const limit = Number.isFinite(parsedLimit) && parsedLimit! > 0 ? parsedLimit : undefined;
 
     const db = this.dbManager.getSessionStore().db;
-    const observations = getObservationsByFilePath(db, filePath, { projects, limit });
+    const observations = getObservationsByFilePath(db, candidatePaths, { projects, limit });
 
     res.json({ observations, count: observations.length });
   });
@@ -277,14 +280,6 @@ export class DataRoutes extends BaseRouteHandler {
     res.json({ isProcessing, queueDepth });
   });
 
-  private handleSetProcessing = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
-    const isProcessing = await this.sessionManager.isAnySessionProcessing();
-    const queueDepth = await this.sessionManager.getTotalQueueDepth();
-    const activeSessions = this.sessionManager.getActiveSessionCount();
-
-    res.json({ status: 'ok', isProcessing, queueDepth, activeSessions });
-  });
-
   private parsePaginationParams(req: Request): { offset: number; limit: number; project?: string; platformSource?: string } {
     const offset = parseInt(req.query.offset as string, 10) || 0;
     const limit = Math.min(parseInt(req.query.limit as string, 10) || 20, 100); 
@@ -375,8 +370,7 @@ export class DataRoutes extends BaseRouteHandler {
             obs.project,
             parsedObs,
             obs.prompt_number || 0,
-            obs.created_at_epoch,
-            obs.discovery_tokens || 0
+            obs.created_at_epoch
           ).catch(err => {
             logger.error('CHROMA', 'Import ChromaDB sync failed', { id }, err as Error);
           });

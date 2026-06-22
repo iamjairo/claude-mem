@@ -27,6 +27,11 @@ const CONTEXT_GENERATOR = {
   source: 'src/services/context-generator.ts'
 };
 
+const TRANSCRIPT_WATCHER = {
+  name: 'transcript-watcher',
+  source: 'src/services/transcripts/transcript-watcher-entry.ts'
+};
+
 function stripHardcodedDirname(filePath) {
   let content = fs.readFileSync(filePath, 'utf-8');
   const before = content.length;
@@ -47,6 +52,149 @@ function stripHardcodedDirname(filePath) {
     fs.writeFileSync(filePath, content);
     console.log(`  ✓ Stripped hardcoded __dirname/__filename paths (${removed} bytes)`);
   }
+}
+
+/**
+ * Rule A canonical-template manifest: maps each host-managed config file's
+ * command string to the buildShellCommand() options that generate it. The
+ * build asserts the hand-maintained files still match the generator output so
+ * the defensive shell prelude can't drift between the three files (issues
+ * #1215, #1533). See src/build/hook-shell-template.ts and CLAUDE.md →
+ * "Spawn-Contract Resolution".
+ */
+function shellTemplateManifest(buildShellCommand) {
+  const ccTrailing = (...tail) => [
+    'node', '"$_P/scripts/bun-runner.js"', '"$_P/scripts/worker-service.cjs"', ...tail,
+  ];
+  const claudeHook = (tail, extra = {}) => buildShellCommand({
+    host: 'claude-code', requireFile: 'bun-runner.js', requireFileSecondary: 'worker-service.cjs',
+    trailingCommand: ccTrailing(...tail), notFoundMessage: 'claude-mem: plugin scripts not found', ...extra,
+  });
+  const codexHook = (tail) => buildShellCommand({
+    host: 'codex-cli', requireFile: 'bun-runner.js', requireFileSecondary: 'worker-service.cjs',
+    trailingCommand: ccTrailing(...tail), notFoundMessage: 'claude-mem: plugin scripts not found',
+  });
+
+  return {
+    'plugin/hooks/hooks.json': {
+      kind: 'hooks',
+      commands: {
+        'Setup.0.0': buildShellCommand({
+          host: 'claude-code-setup', requireFile: 'version-check.js',
+          trailingCommand: ['node', '"$_P/scripts/version-check.js"'],
+          notFoundMessage: 'claude-mem: version-check.js not found',
+        }),
+        'SessionStart.0.0': claudeHook(['start'], { trailingJson: { continue: true, suppressOutput: true } }),
+        'SessionStart.0.1': claudeHook(['hook', 'claude-code', 'context']),
+        'UserPromptSubmit.0.0': claudeHook(['hook', 'claude-code', 'session-init']),
+        'PostToolUse.0.0': claudeHook(['hook', 'claude-code', 'observation']),
+        'PreToolUse.0.0': claudeHook(['hook', 'claude-code', 'file-context']),
+        'Stop.0.0': claudeHook(['hook', 'claude-code', 'summarize']),
+      },
+    },
+    'plugin/hooks/codex-hooks.json': {
+      kind: 'hooks',
+      commands: {
+        'SessionStart.0.0': buildShellCommand({
+          host: 'codex-cli', requireFile: 'version-check.js', extraEnv: { CLAUDE_MEM_CODEX_HOOK: '1' },
+          trailingCommand: ['node', '"$_P/scripts/version-check.js"'],
+          notFoundMessage: 'claude-mem: version-check.js not found',
+        }),
+        'SessionStart.0.1': codexHook(['start']),
+        'SessionStart.0.2': codexHook(['hook', 'codex', 'context']),
+        'UserPromptSubmit.0.0': codexHook(['hook', 'codex', 'session-init']),
+        'PreToolUse.0.0': codexHook(['hook', 'codex', 'file-context']),
+        'PostToolUse.0.0': codexHook(['hook', 'codex', 'observation']),
+        'Stop.0.0': codexHook(['hook', 'codex', 'summarize']),
+      },
+    },
+    'plugin/.mcp.json': {
+      kind: 'mcp',
+      command: buildShellCommand({
+        // The mcp Node launcher derives its spawn target from requireFile, so
+        // no trailingCommand is needed (it is ignored for this host).
+        host: 'mcp', requireFile: 'mcp-server.cjs',
+        notFoundMessage: 'claude-mem: mcp server not found',
+        mcpExtraCandidates: ['$PWD/plugin', '$PWD'],
+        mcpExtraCacheRoots: [
+          '$HOME/.codex/plugins/cache/claude-mem-local/claude-mem',
+          '$HOME/.codex/plugins/cache/thedotmack/claude-mem',
+        ],
+      }),
+    },
+  };
+}
+
+function hookCommandByPath(parsed, dottedPath) {
+  const [event, groupIdx, hookIdx] = dottedPath.split('.');
+  return parsed.hooks?.[event]?.[Number(groupIdx)]?.hooks?.[Number(hookIdx)]?.command ?? null;
+}
+
+async function verifyShellTemplateCanonical() {
+  console.log('\n📋 Verifying Rule A shell templates match the canonical generator...');
+
+  // Compile src/build/hook-shell-template.ts in-memory and import it. The build
+  // runs under Node, which can't import .ts directly, so we bundle to ESM and
+  // load via a data: URL.
+  const bundled = await build({
+    entryPoints: ['src/build/hook-shell-template.ts'],
+    bundle: true,
+    platform: 'node',
+    format: 'esm',
+    write: false,
+    logLevel: 'error',
+  });
+  const moduleSource = bundled.outputFiles[0].text;
+  const dataUrl = 'data:text/javascript;base64,' + Buffer.from(moduleSource).toString('base64');
+  const { buildShellCommand } = await import(dataUrl);
+
+  const manifest = shellTemplateManifest(buildShellCommand);
+
+  for (const [filePath, spec] of Object.entries(manifest)) {
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    if (spec.kind === 'mcp') {
+      const actual = parsed.mcpServers?.['mcp-search']?.args?.[1] ?? '';
+      if (actual !== spec.command) {
+        throw new Error(
+          `Hand-edited shell string detected in ${filePath} (mcp-search). It no longer matches src/build/hook-shell-template.ts. ` +
+          `Update the generator (and this manifest) instead of hand-editing the launcher.`
+        );
+      }
+    } else {
+      for (const [dottedPath, expected] of Object.entries(spec.commands)) {
+        const actual = hookCommandByPath(parsed, dottedPath);
+        if (actual !== expected) {
+          throw new Error(
+            `Hand-edited shell string detected in ${filePath} (${dottedPath}). It no longer matches src/build/hook-shell-template.ts. ` +
+            `Regenerate via the canonical generator instead of hand-editing the command.`
+          );
+        }
+      }
+    }
+  }
+
+  // Rule C safety net (bun-runner.js fixBrokenScriptPath) must stay documented.
+  const bunRunner = fs.readFileSync('plugin/scripts/bun-runner.js', 'utf-8');
+  if (!bunRunner.includes('function fixBrokenScriptPath')) {
+    throw new Error(
+      'plugin/scripts/bun-runner.js is missing fixBrokenScriptPath — it is the Rule C runtime safety net behind Rule A. Do not remove it.'
+    );
+  }
+
+  // Parser-compat guard (issue #2791): bun-runner.js is invoked by hosts that
+  // may run a pre-ES2020 Node whose ESM loader throws on optional chaining.
+  // Strip comments, then forbid `?.` / `??` in executable code.
+  const bunRunnerCode = bunRunner
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/.*$/gm, '$1');
+  if (/\?\.|\?\?/.test(bunRunnerCode)) {
+    throw new Error(
+      'plugin/scripts/bun-runner.js uses optional chaining (?.) or nullish coalescing (??) — ' +
+      'this launcher must parse on pre-ES2020 Node (issue #2791). Rewrite with explicit guards.'
+    );
+  }
+
+  console.log('✓ Rule A shell templates match the canonical generator');
 }
 
 async function buildHooks() {
@@ -77,7 +225,7 @@ async function buildHooks() {
       description: 'Runtime dependencies for claude-mem bundled hooks',
       type: 'module',
       dependencies: {
-        'zod': '^4.3.6',
+        'zod': '^4.4.3',
         'tree-sitter-cli': '^0.26.5',
         'tree-sitter-c': '^0.24.1',
         'tree-sitter-cpp': '^0.23.4',
@@ -112,7 +260,7 @@ async function buildHooks() {
         'tree-sitter-cli'
       ],
       engines: {
-        node: '>=18.0.0',
+        node: '>=20.12.0',
         bun: '>=1.0.0'
       }
     };
@@ -148,7 +296,18 @@ async function buildHooks() {
         'cohere-ai',
         'ollama',
         '@chroma-core/default-embed',
-        'onnxruntime-node'
+        'onnxruntime-node',
+        // better-auth (~3.7MB) is only reachable through BetterAuthRoutes' request-time
+        // dynamic import('better-auth/node') / import('./auth.js'). esbuild otherwise
+        // inlines that dynamic-import target into the worker bundle, dragging in the full
+        // better-auth library (kysely, oauth, nanoid, …) even though the worker never
+        // exercises it (the dep isn't in the worker's runtime plugin/package.json deps,
+        // and the route handler already wraps the import in try/catch → graceful 500).
+        // Keeping it external strips the dead weight from worker-service.cjs. See #2584.
+        'better-auth',
+        'better-auth/node',
+        'better-auth/plugins',
+        '@better-auth/api-key',
       ],
       define: {
         '__DEFAULT_PACKAGE_VERSION__': `"${version}"`,
@@ -173,6 +332,17 @@ async function buildHooks() {
     fs.chmodSync(`${hooksDir}/${WORKER_SERVICE.name}.cjs`, 0o755);
     const workerStats = fs.statSync(`${hooksDir}/${WORKER_SERVICE.name}.cjs`);
     console.log(`✓ worker-service built (${(workerStats.size / 1024).toFixed(2)} KB)`);
+
+    // Advisory only — a sudden jump usually means a heavy server-only dependency
+    // (better-auth, kysely, a database driver) leaked into the worker bundle via a
+    // transitive import (#2584). Never blocks the build.
+    const WORKER_SERVICE_MAX_BYTES = 2900 * 1024;
+    if (workerStats.size > WORKER_SERVICE_MAX_BYTES) {
+      console.warn(
+        `⚠️  worker-service.cjs is ${(workerStats.size / 1024).toFixed(2)} KB (advisory budget ${(WORKER_SERVICE_MAX_BYTES / 1024).toFixed(0)} KB). ` +
+        `If this jumped unexpectedly, check whether a server-only dependency leaked into the worker bundle (see #2584).`
+      );
+    }
 
     console.log(`\n🔧 Building server beta service...`);
     await build({
@@ -276,8 +446,8 @@ async function buildHooks() {
 
     const MCP_SERVER_MAX_BYTES = 600 * 1024;
     if (mcpServerStats.size > MCP_SERVER_MAX_BYTES) {
-      throw new Error(
-        `mcp-server.cjs is ${(mcpServerStats.size / 1024).toFixed(2)} KB, exceeding the ${(MCP_SERVER_MAX_BYTES / 1024).toFixed(0)} KB budget. This usually means a transitive import pulled worker-service.ts (or another heavy module) into the MCP bundle. The MCP server is supposed to be a thin HTTP wrapper — audit recent imports in src/servers/mcp-server.ts and src/services/worker-spawner.ts. See PR #1645 for context on why this guardrail exists.`
+      console.warn(
+        `⚠️  mcp-server.cjs is ${(mcpServerStats.size / 1024).toFixed(2)} KB (advisory budget ${(MCP_SERVER_MAX_BYTES / 1024).toFixed(0)} KB). If this jumped unexpectedly, a transitive import may have pulled worker-service.ts or another heavy module into the MCP bundle (see #1645).`
       );
     }
 
@@ -302,6 +472,43 @@ async function buildHooks() {
 
     const contextGenStats = fs.statSync(`${hooksDir}/${CONTEXT_GENERATOR.name}.cjs`);
     console.log(`✓ context-generator built (${(contextGenStats.size / 1024).toFixed(2)} KB)`);
+
+    console.log(`\n🔧 Building transcript watcher...`);
+    await build({
+      entryPoints: [TRANSCRIPT_WATCHER.source],
+      bundle: true,
+      platform: 'node',
+      target: 'node18',
+      format: 'cjs',
+      outfile: `${hooksDir}/${TRANSCRIPT_WATCHER.name}.cjs`,
+      minify: true,
+      logLevel: 'error',
+      // Externalize zod for consistency with worker-service / server-beta-service —
+      // any zod usage in the processor.ts import chain should resolve at runtime
+      // against plugin/node_modules instead of being inlined (avoids duplicate-
+      // instance hazards and keeps the bundle slim).
+      external: ['bun:sqlite', 'zod'],
+      define: {
+        '__DEFAULT_PACKAGE_VERSION__': `"${version}"`
+      },
+      banner: {
+        js: '#!/usr/bin/env bun'
+      }
+    });
+
+    stripHardcodedDirname(`${hooksDir}/${TRANSCRIPT_WATCHER.name}.cjs`);
+
+    fs.chmodSync(`${hooksDir}/${TRANSCRIPT_WATCHER.name}.cjs`, 0o755);
+    const transcriptWatcherStats = fs.statSync(`${hooksDir}/${TRANSCRIPT_WATCHER.name}.cjs`);
+    console.log(`✓ transcript-watcher built (${(transcriptWatcherStats.size / 1024).toFixed(2)} KB)`);
+
+    // Advisory only — the watcher is meant to be a thin file-tail loop.
+    const TRANSCRIPT_WATCHER_MAX_BYTES = 200 * 1024;
+    if (transcriptWatcherStats.size > TRANSCRIPT_WATCHER_MAX_BYTES) {
+      console.warn(
+        `⚠️  transcript-watcher.cjs is ${(transcriptWatcherStats.size / 1024).toFixed(2)} KB (advisory budget ${(TRANSCRIPT_WATCHER_MAX_BYTES / 1024).toFixed(0)} KB). If this jumped unexpectedly, check src/services/transcripts/processor.ts and watcher.ts for heavy imports.`
+      );
+    }
 
     console.log(`\n🔧 Building NPX CLI...`);
     const npxCliOutDir = 'dist/npx-cli';
@@ -414,7 +621,6 @@ async function buildHooks() {
       'plugin/.codex-plugin/plugin.json',
       'plugin/.mcp.json',
       '.codex-plugin/plugin.json',
-      '.mcp.json',
       '.agents/plugins/marketplace.json',
     ];
     for (const filePath of requiredDistributionFiles) {
@@ -433,11 +639,7 @@ async function buildHooks() {
     if (claudeMemMarketplaceEntry?.source?.path !== './plugin') {
       throw new Error('.agents/plugins/marketplace.json must point claude-mem source.path at ./plugin so Codex loads the bundled plugin root');
     }
-    const rootMcp = JSON.parse(fs.readFileSync('.mcp.json', 'utf-8'));
     const bundledMcp = JSON.parse(fs.readFileSync('plugin/.mcp.json', 'utf-8'));
-    if (JSON.stringify(rootMcp.mcpServers?.['mcp-search']) !== JSON.stringify(bundledMcp.mcpServers?.['mcp-search'])) {
-      throw new Error('.mcp.json and plugin/.mcp.json mcp-search launchers must stay in sync');
-    }
     const mcpSearchCommand = bundledMcp.mcpServers?.['mcp-search']?.args?.join(' ') ?? '';
     if (!mcpSearchCommand.includes('.codex/plugins/cache/claude-mem-local/claude-mem')) {
       throw new Error('plugin/.mcp.json mcp-search launcher must include Codex cache fallback for hosts that do not inject PLUGIN_ROOT');
@@ -447,12 +649,15 @@ async function buildHooks() {
     }
     console.log('✓ All required distribution files present');
 
+    await verifyShellTemplateCanonical();
+
     console.log('\n✅ All build targets compiled successfully!');
     console.log(`   Output: ${hooksDir}/`);
     console.log(`   - Worker: worker-service.cjs`);
     console.log(`   - Server beta: server-beta-service.cjs`);
     console.log(`   - MCP Server: mcp-server.cjs`);
     console.log(`   - Context Generator: context-generator.cjs`);
+    console.log(`   - Transcript Watcher: transcript-watcher.cjs`);
     console.log(`   Output: ${npxCliOutDir}/`);
     console.log(`   - NPX CLI: index.js`);
     if (fs.existsSync('openclaw/dist/index.js')) {

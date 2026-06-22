@@ -8,14 +8,27 @@ import { SettingsDefaultsManager } from '../../src/shared/SettingsDefaultsManage
 describe('SettingsDefaultsManager', () => {
   let tempDir: string;
   let settingsPath: string;
+  let prevDataDirEnv: string | undefined;
 
   beforeEach(() => {
     tempDir = join(tmpdir(), `settings-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     mkdirSync(tempDir, { recursive: true });
     settingsPath = join(tempDir, 'settings.json');
+
+    // The preload tripwire (tests/preload.ts) pins CLAUDE_MEM_DATA_DIR for
+    // the whole run, and loadFromFile applies env overrides on top of file
+    // values — which would make every loadFromFile result diverge from
+    // getAllDefaults()'s hardcoded ~/.claude-mem default. These tests are
+    // about file > defaults behavior on an EXPLICIT settingsPath (no real
+    // data-dir I/O happens here), so drop the env override for their
+    // duration and restore it after.
+    prevDataDirEnv = process.env.CLAUDE_MEM_DATA_DIR;
+    delete process.env.CLAUDE_MEM_DATA_DIR;
   });
 
   afterEach(() => {
+    if (prevDataDirEnv === undefined) delete process.env.CLAUDE_MEM_DATA_DIR;
+    else process.env.CLAUDE_MEM_DATA_DIR = prevDataDirEnv;
     try {
       rmSync(tempDir, { recursive: true, force: true });
     } catch {
@@ -258,6 +271,40 @@ describe('SettingsDefaultsManager', () => {
     });
   });
 
+  describe('stdout discipline', () => {
+    // CLI commands like `start` promise machine-readable JSON on stdout to
+    // the hook framework; settings bootstrap runs inside them, so its
+    // informational notices must go to stderr. PR #2894 CI caught the
+    // creation notice corrupting the start command's JSON on first boot in
+    // a fresh data dir.
+    it('should not write to stdout when creating the settings file', () => {
+      const stdoutCalls: unknown[][] = [];
+      const originalLog = console.log;
+      console.log = (...args: unknown[]) => { stdoutCalls.push(args); };
+      try {
+        expect(existsSync(settingsPath)).toBe(false);
+        SettingsDefaultsManager.loadFromFile(settingsPath);
+        expect(existsSync(settingsPath)).toBe(true);
+        expect(stdoutCalls).toEqual([]);
+      } finally {
+        console.log = originalLog;
+      }
+    });
+
+    it('should not write to stdout when migrating a nested-schema file', () => {
+      writeFileSync(settingsPath, JSON.stringify({ env: { CLAUDE_MEM_MODEL: 'nested-model' } }));
+      const stdoutCalls: unknown[][] = [];
+      const originalLog = console.log;
+      console.log = (...args: unknown[]) => { stdoutCalls.push(args); };
+      try {
+        SettingsDefaultsManager.loadFromFile(settingsPath);
+        expect(stdoutCalls).toEqual([]);
+      } finally {
+        console.log = originalLog;
+      }
+    });
+  });
+
   describe('getAllDefaults', () => {
     it('should return a copy of defaults', () => {
       const defaults1 = SettingsDefaultsManager.getAllDefaults();
@@ -285,7 +332,7 @@ describe('SettingsDefaultsManager', () => {
 
   describe('get', () => {
     it('should return default value for key', () => {
-      expect(SettingsDefaultsManager.get('CLAUDE_MEM_MODEL')).toBe('claude-sonnet-4-6');
+      expect(SettingsDefaultsManager.get('CLAUDE_MEM_MODEL')).toBe('claude-haiku-4-5-20251001');
       const expectedPort = String(37700 + ((process.getuid?.() ?? 77) % 100));
       expect(SettingsDefaultsManager.get('CLAUDE_MEM_WORKER_PORT')).toBe(expectedPort);
     });

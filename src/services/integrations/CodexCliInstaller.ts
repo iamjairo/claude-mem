@@ -1,7 +1,7 @@
 import path from 'path';
 import { homedir } from 'os';
-import { execFileSync, spawnSync } from 'child_process';
-import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { execFileSync, spawnSync, type SpawnSyncReturns } from 'child_process';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { logger } from '../../utils/logger.js';
 import { paths } from '../../shared/paths.js';
@@ -9,7 +9,10 @@ import { paths } from '../../shared/paths.js';
 const CODEX_DIR = path.join(homedir(), '.codex');
 const CODEX_AGENTS_MD_PATH = path.join(CODEX_DIR, 'AGENTS.md');
 const CODEX_TRANSCRIPT_WATCH_CONFIG_PATH = paths.transcriptsConfig();
+const CODEX_CONFIG_PATH = path.join(CODEX_DIR, 'config.toml');
 const MARKETPLACE_NAME = 'claude-mem-local';
+const CODEX_PLUGIN_ID = `claude-mem@${MARKETPLACE_NAME}`;
+const LEGACY_CODEX_PLUGIN_IDS = ['claude-mem@thedotmack'];
 const MIN_CODEX_MARKETPLACE_VERSION = '0.128.0';
 const REQUIRED_MARKETPLACE_FILES = [
   path.join('.agents', 'plugins', 'marketplace.json'),
@@ -77,11 +80,36 @@ function resolvePluginMarketplaceRoot(preferredRoot?: string): string {
   throw new Error('Could not locate a Codex marketplace root with .agents/plugins/marketplace.json and plugin/.codex-plugin/plugin.json. Run npx claude-mem@latest install from the package or repo root.');
 }
 
-function runCodex(args: string[]): void {
-  const result = spawnSync('codex', args, {
+/**
+ * Spawn the `codex` CLI.
+ *
+ * Issue #2695: on Windows `codex` is installed as `codex.cmd` (a PATH shim).
+ * `child_process.spawnSync('codex', args)` without a shell does NOT consult
+ * PATHEXT, so it can only find an extension-less `codex` and throws ENOENT.
+ * Setting `shell: true` makes Windows resolve the `.cmd`/`.exe`/`.bat` shim
+ * via cmd.exe (the same workaround bun-runner.js uses for `where bun`). Under
+ * a shell the args are re-tokenized, so we quote each one to preserve paths
+ * containing spaces. On POSIX we keep the direct (no-shell) exec.
+ */
+export function codexSpawn(args: string[]): SpawnSyncReturns<string> {
+  const isWindows = process.platform === 'win32';
+  if (isWindows) {
+    const quotedArgs = args.map((arg) => `"${arg.replace(/"/g, '\\"')}"`);
+    return spawnSync('codex', quotedArgs, {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      shell: true,
+      windowsHide: true,
+    });
+  }
+  return spawnSync('codex', args, {
     encoding: 'utf-8',
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+}
+
+function runCodex(args: string[]): void {
+  const result = codexSpawn(args);
   const output = console;
   const stdout = result.stdout?.trimEnd();
   const stderr = result.stderr?.trimEnd();
@@ -131,23 +159,80 @@ function registerCodexMarketplace(marketplaceRoot: string): void {
   runCodex(['plugin', 'marketplace', 'add', marketplaceRoot]);
 }
 
-function parseSemver(value: string): [number, number, number] | null {
-  const match = value.match(/(\d+)\.(\d+)\.(\d+)/);
-  if (!match) return null;
-  return [Number(match[1]), Number(match[2]), Number(match[3])];
+export function setTomlBooleanInTable(content: string, header: string, key: string, enabled: boolean): string {
+  const booleanLine = `${key} = ${enabled ? 'true' : 'false'}`;
+  const lines = content.split('\n');
+  const headerIndex = lines.findIndex((line) => line.trim() === header);
+
+  if (headerIndex === -1) {
+    const trimmed = content.trimEnd();
+    return `${trimmed}${trimmed ? '\n\n' : ''}${header}\n${booleanLine}\n`;
+  }
+
+  let sectionEnd = headerIndex + 1;
+  while (sectionEnd < lines.length && !/^\s*\[/.test(lines[sectionEnd])) {
+    sectionEnd += 1;
+  }
+
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const keyPattern = new RegExp(`^\\s*${escapedKey}\\s*=`);
+  const keyIndex = lines.findIndex(
+    (line, index) => index > headerIndex && index < sectionEnd && keyPattern.test(line),
+  );
+
+  if (keyIndex === -1) {
+    lines.splice(headerIndex + 1, 0, booleanLine);
+  } else {
+    lines[keyIndex] = booleanLine;
+  }
+
+  return lines.join('\n');
 }
 
-function compareSemver(left: [number, number, number], right: [number, number, number]): number {
-  if (left[0] !== right[0]) return left[0] - right[0];
-  if (left[1] !== right[1]) return left[1] - right[1];
-  return left[2] - right[2];
+export function setTomlPluginEnabled(content: string, pluginId: string, enabled: boolean): string {
+  const escapedPluginId = pluginId.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  return setTomlBooleanInTable(content, `[plugins."${escapedPluginId}"]`, 'enabled', enabled);
+}
+
+export function setTomlFeatureEnabled(content: string, featureName: string, enabled: boolean): string {
+  return setTomlBooleanInTable(content, '[features]', featureName, enabled);
+}
+
+function writeCodexPluginConfig(enabled: boolean): boolean {
+  if (!enabled && !existsSync(CODEX_CONFIG_PATH)) return false;
+  mkdirSync(CODEX_DIR, { recursive: true });
+  const current = existsSync(CODEX_CONFIG_PATH) ? readFileSync(CODEX_CONFIG_PATH, 'utf-8') : '';
+  let next = current;
+
+  if (enabled) {
+    next = setTomlFeatureEnabled(next, 'hooks', true);
+  }
+  for (const legacyPluginId of LEGACY_CODEX_PLUGIN_IDS) {
+    next = setTomlPluginEnabled(next, legacyPluginId, false);
+  }
+  next = setTomlPluginEnabled(next, CODEX_PLUGIN_ID, enabled);
+
+  if (next === current) return false;
+  writeFileSync(CODEX_CONFIG_PATH, next);
+  return true;
+}
+
+function enableCodexPluginConfig(): void {
+  const changed = writeCodexPluginConfig(true);
+  console.log(`  Enabled Codex plugin: ${CODEX_PLUGIN_ID}${changed ? '' : ' (already enabled)'}`);
+}
+
+function disableCodexPluginConfig(): void {
+  const changed = writeCodexPluginConfig(false);
+  console.log(`  Disabled Codex plugin: ${CODEX_PLUGIN_ID}${changed ? '' : ' (already disabled)'}`);
+}
+
+function extractSemver(value: string): string | null {
+  return value.match(/\d+\.\d+\.\d+/)?.[0] ?? null;
 }
 
 function assertCodexMarketplaceSupported(): void {
-  const result = spawnSync('codex', ['--version'], {
-    encoding: 'utf-8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  const result = codexSpawn(['--version']);
   const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`.trim();
 
   if (result.error) {
@@ -158,15 +243,14 @@ function assertCodexMarketplaceSupported(): void {
     return;
   }
 
-  const version = parseSemver(output);
+  const version = extractSemver(output);
   if (!version) {
     console.warn(`  Could not parse Codex CLI version from "${output || '<empty>'}". Continuing; plugin marketplace support requires ${MIN_CODEX_MARKETPLACE_VERSION} or newer.`);
     return;
   }
 
-  const minimumVersion = parseSemver(MIN_CODEX_MARKETPLACE_VERSION);
-  if (minimumVersion && compareSemver(version, minimumVersion) < 0) {
-    throw new Error(`Codex CLI ${version.join('.')} is too old for plugin marketplace support. Update Codex CLI to ${MIN_CODEX_MARKETPLACE_VERSION} or newer, then run: npx claude-mem@latest install`);
+  if (version.localeCompare(MIN_CODEX_MARKETPLACE_VERSION, undefined, { numeric: true }) < 0) {
+    throw new Error(`Codex CLI ${version} is too old for plugin marketplace support. Update Codex CLI to ${MIN_CODEX_MARKETPLACE_VERSION} or newer, then run: npx claude-mem@latest install`);
   }
 }
 
@@ -284,15 +368,11 @@ export async function installCodexCli(marketplaceRootOverride?: string): Promise
 
     console.log(`  Registering Codex plugin marketplace: ${marketplaceRoot}`);
     registerCodexMarketplace(marketplaceRoot);
+    enableCodexPluginConfig();
     runCodexBestEffort(
       ['plugin', 'marketplace', 'upgrade', MARKETPLACE_NAME],
       'Refreshed Codex marketplace and installed plugin cache.',
       'Could not refresh Codex marketplace cache; reinstall or upgrade claude-mem from /plugins if Codex still uses old MCP config',
-    );
-    runCodexBestEffort(
-      ['features', 'enable', 'plugin_hooks'],
-      'Enabled Codex plugin_hooks so claude-mem hooks can run.',
-      'Could not enable Codex plugin_hooks; run `codex features enable plugin_hooks` if context hooks do not appear',
     );
     if (!cleanupLegacyCodexAgentsMdContext()) {
       console.warn(`  Native Codex hooks registered, but failed to remove legacy AGENTS.md context from ${CODEX_AGENTS_MD_PATH}.`);
@@ -309,9 +389,7 @@ Plugin source:     ${marketplaceRoot}
 
 Next steps:
   1. Open Codex CLI in your project
-  2. Run /plugins
-  3. Install claude-mem from the claude-mem (local) marketplace
-  4. Restart Codex CLI after install so MCP tools and plugin hooks reload
+  2. Restart any running Codex sessions so native hooks are loaded
 
 For a fresh setup, the supported entry point is:
   npx claude-mem@latest install
@@ -328,6 +406,14 @@ export function uninstallCodexCli(): number {
   console.log('\nUninstalling Claude-Mem Codex CLI integration...\n');
 
   let failed = false;
+
+  try {
+    disableCodexPluginConfig();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`\nCodex plugin config update failed: ${message}`);
+    failed = true;
+  }
 
   try {
     if (commandExists('codex')) {
