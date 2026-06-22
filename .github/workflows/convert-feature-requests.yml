@@ -25,7 +25,7 @@ jobs:
     steps:
       - name: Get issue details and create discussion
         id: discussion
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             // Get issue details
@@ -86,7 +86,7 @@ jobs:
             }
 
       - name: Comment on issue
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const issueNumber = ${{ steps.discussion.outputs.issue_number }};
@@ -104,7 +104,7 @@ jobs:
             console.log(`Added comment to issue #${issueNumber}`);
 
       - name: Close and lock issue
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const issueNumber = ${{ steps.discussion.outputs.issue_number }};
