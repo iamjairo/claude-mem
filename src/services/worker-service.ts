@@ -474,8 +474,8 @@ export class WorkerService implements WorkerRef {
       const formattingService = new FormattingService();
       const timelineService = new TimelineService();
       const searchManager = new SearchManager(
-        this.dbManager.getSessionSearch(),
-        this.dbManager.getSessionStore(),
+        this.dbManager.getSessionSearchOrNull() as any,
+        this.dbManager.getSessionStoreOrNull() as any,
         this.dbManager.getChromaSync(),
         formattingService,
         timelineService
@@ -486,12 +486,12 @@ export class WorkerService implements WorkerRef {
 
       const { SearchOrchestrator } = await import('./worker/search/SearchOrchestrator.js');
       const corpusSearchOrchestrator = new SearchOrchestrator(
-        this.dbManager.getSessionSearch(),
-        this.dbManager.getSessionStore(),
+        this.dbManager.getSessionSearchOrNull() as any,
+        this.dbManager.getSessionStoreOrNull() as any,
         this.dbManager.getChromaSync()
       );
       const corpusBuilder = new CorpusBuilder(
-        this.dbManager.getSessionStore(),
+        this.dbManager.getSessionStoreOrNull() as any,
         corpusSearchOrchestrator,
         this.corpusStore
       );
@@ -564,7 +564,7 @@ export class WorkerService implements WorkerRef {
       await this.startTranscriptWatcher(settings);
 
       if (this.chromaMcpManager) {
-        ChromaSync.backfillAllProjects(this.dbManager.getSessionStore()).then(() => {
+        ChromaSync.backfillAllProjects(this.dbManager.getSessionStoreOrNull() ?? undefined).then(() => {
           logger.info('CHROMA_SYNC', 'Backfill check complete for all projects');
         }).catch(error => {
           logger.error('CHROMA_SYNC', 'Backfill failed (non-blocking)', {}, error as Error);

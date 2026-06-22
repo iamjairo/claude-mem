@@ -1,36 +1,82 @@
-# Lightweight single-user worker stack — SQLite, no Postgres/Valkey.
+# claude-mem worker stack with MongoDB backend.
 #
-# Runs the local worker-service (SQLite-backed) inside a container, exposing
-# it on port 37777. Claude Code hooks on the host detect the running worker via
-# the health endpoint and skip spawning a local process. Claude Desktop's MCP
-# server connects to the same port for memory search.
+# Runs the worker-service backed by MongoDB instead of a local SQLite file.
+# MongoDB gives you a proper database server with persistent named volumes,
+# concurrent access, and GUI tooling via mongo-express.
 #
 # Usage:
-#   1. Set required env vars (copy .env.worker.example to .env.worker):
-#        ANTHROPIC_API_KEY=sk-ant-...
-#        CLAUDE_MEM_DATA_DIR=/absolute/path/on/host   # host-side data directory
-#   2. Start:
-#        docker compose -f docker-compose.worker.yml up -d
-#   3. Point your Claude Code hooks and Claude Desktop MCP server to port 37777:
+#   1. Copy .env.mongodb.example to .env.mongodb and fill in your API key:
+#        cp .env.mongodb.example .env.mongodb
+#        # edit .env.mongodb — set ANTHROPIC_API_KEY
+#
+#   2. Start the full stack (worker + MongoDB + mongo-express UI):
+#        docker compose -f docker-compose.worker.yml --env-file .env.mongodb up -d
+#
+#   3. Point Claude Code hooks and Claude Desktop MCP server to port 37777:
 #        CLAUDE_MEM_WORKER_HOST=127.0.0.1
 #        CLAUDE_MEM_WORKER_PORT=37777
-#      (Add these to ~/.claude-mem/settings.json or your shell environment)
-#   4. Verify:
+#
+#   4. Verify worker health:
 #        curl http://127.0.0.1:37777/healthz
 #
-# The container mounts CLAUDE_MEM_DATA_DIR from the host so the SQLite database
-# and logs are persisted to your machine and survive container restarts.
+#   5. Browse data in mongo-express (optional):
+#        http://localhost:8081
+#        Default credentials: admin / pass  (change ME_CONFIG_BASICAUTH_PASSWORD below)
 #
-# To stop:  docker compose -f docker-compose.worker.yml down
-# To tail logs:  docker compose -f docker-compose.worker.yml logs -f
+# To stop:        docker compose -f docker-compose.worker.yml down
+# To destroy data: docker compose -f docker-compose.worker.yml down -v
+# To tail logs:   docker compose -f docker-compose.worker.yml logs -f
+#
+# SQLite-only mode (original behaviour):
+#   Omit --env-file .env.mongodb and pass CLAUDE_MEM_DATA_DIR on the CLI:
+#        ANTHROPIC_API_KEY=... CLAUDE_MEM_DATA_DIR=/path docker compose -f docker-compose.worker.yml up -d
 
 services:
+
+  # ── MongoDB ────────────────────────────────────────────────────────────────
+  mongodb:
+    image: mongo:7
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_DATABASE: claude_mem
+      # Optional auth — uncomment and set credentials if you expose Mongo externally.
+      # MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-claude}
+      # MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?MONGO_ROOT_PASSWORD is required}
+    volumes:
+      - mongo_data:/data/db
+    ports:
+      # Only expose to localhost. Remove or restrict further in production.
+      - "127.0.0.1:27017:27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping').ok", "--quiet"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  # ── mongo-express (browser UI) ─────────────────────────────────────────────
+  mongo-express:
+    image: mongo-express:1
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    environment:
+      ME_CONFIG_MONGODB_URL: mongodb://mongodb:27017/claude_mem
+      ME_CONFIG_BASICAUTH_USERNAME: ${ME_ADMIN_USER:-admin}
+      ME_CONFIG_BASICAUTH_PASSWORD: ${ME_ADMIN_PASSWORD:-pass}
+      ME_CONFIG_SITE_BASEURL: /
+    ports:
+      - "127.0.0.1:8081:8081"
+
+  # ── claude-mem worker ──────────────────────────────────────────────────────
   claude-mem-worker:
     build:
       context: .
       dockerfile: docker/claude-mem/Dockerfile
-    # Use shell mode so the entrypoint passes control directly to our command,
-    # bypassing the server-beta startup path entirely.
+    depends_on:
+      mongodb:
+        condition: service_healthy
     environment:
       CLAUDE_MEM_CONTAINER_MODE: shell
       CLAUDE_MEM_DOCKER: "1"
@@ -38,23 +84,29 @@ services:
       CLAUDE_MEM_QUEUE_ENGINE: sqlite
       CLAUDE_MEM_WORKER_HOST: "0.0.0.0"
       CLAUDE_MEM_WORKER_PORT: "37777"
+      # Switch to MongoDB backend
+      CLAUDE_MEM_DB_BACKEND: mongodb
+      CLAUDE_MEM_MONGODB_URI: mongodb://mongodb:27017
+      # DATA_DIR is still used for logs/config even in MongoDB mode
       CLAUDE_MEM_DATA_DIR: /data/claude-mem
-      # Chroma vector search is optional; disable by default to keep startup fast.
-      # Set to "true" if you want semantic search (requires uv/uvx in the image).
       CLAUDE_MEM_CHROMA_ENABLED: "false"
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY is required}
     command: ["bun", "/opt/claude-mem/scripts/worker-service.cjs", "--daemon"]
     ports:
       - "127.0.0.1:37777:37777"
     volumes:
-      # Mount the host data directory so the SQLite DB and logs are persisted.
-      - type: bind
-        source: ${CLAUDE_MEM_DATA_DIR:?CLAUDE_MEM_DATA_DIR is required}
-        target: /data/claude-mem
+      # Logs and config (not the database — that lives in MongoDB)
+      - worker_data:/data/claude-mem
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:37777/healthz"]
       interval: 10s
       timeout: 3s
       retries: 12
-      start_period: 30s
+      start_period: 40s
+
+volumes:
+  mongo_data:
+    driver: local
+  worker_data:
+    driver: local

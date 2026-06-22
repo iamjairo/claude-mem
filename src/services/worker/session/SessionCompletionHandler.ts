@@ -12,9 +12,9 @@ export class SessionCompletionHandler {
   ) {}
 
   async finalizeSession(sessionDbId: number): Promise<void> {
-    const sessionStore = this.dbManager.getSessionStore();
+    const sessionStore = await this.dbManager.getStore();
 
-    const row = sessionStore.getSessionById(sessionDbId);
+    const row = await sessionStore.getSessionById(sessionDbId);
     if (!row) {
       logger.debug('SESSION', 'finalizeSession: session not found, skipping', { sessionId: sessionDbId });
       return;
@@ -24,7 +24,7 @@ export class SessionCompletionHandler {
       return;
     }
 
-    sessionStore.markSessionCompleted(sessionDbId);
+    await sessionStore.markSessionCompleted(sessionDbId);
 
     // The in-RAM message buffer is dropped when the session is removed
     // (SessionManager.removeSessionImmediate/deleteSession → buffer.dispose),

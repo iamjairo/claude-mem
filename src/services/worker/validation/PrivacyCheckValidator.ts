@@ -1,4 +1,4 @@
-import { SessionStore } from '../../sqlite/SessionStore.js';
+import type { ISessionStore } from '../../mongodb/ISessionStore.js';
 import { logger } from '../../../utils/logger.js';
 
 export type PromptPrivacyDecision =
@@ -18,15 +18,15 @@ export class PrivacyCheckValidator {
    *  - The row is PRESENT but empty after privacy stripping (''/whitespace):
    *    the user genuinely redacted the turn → suppress.
    */
-  static checkUserPromptPrivacy(
-    store: SessionStore,
+  static async checkUserPromptPrivacy(
+    store: ISessionStore,
     contentSessionId: string,
     promptNumber: number,
     operationType: 'observation' | 'summarize',
     sessionDbId: number,
     additionalContext?: Record<string, any>
-  ): PromptPrivacyDecision {
-    const userPrompt = store.getUserPrompt(contentSessionId, promptNumber);
+  ): Promise<PromptPrivacyDecision> {
+    const userPrompt = await store.getUserPrompt(contentSessionId, promptNumber);
 
     if (userPrompt === null) {
       logger.warn(

@@ -170,7 +170,7 @@ export class ClaudeProvider {
   }
 
   private resetSessionForFreshStart(session: ActiveSession): void {
-    this.dbManager.getSessionStore().updateMemorySessionId(session.sessionDbId, null);
+    void this.dbManager.getStore().updateMemorySessionId(session.sessionDbId, null);
     session.memorySessionId = null;
     session.forceInit = true;
   }
@@ -280,11 +280,11 @@ export class ClaudeProvider {
         if (message.session_id && message.session_id !== session.memorySessionId) {
           const previousId = session.memorySessionId;
           session.memorySessionId = message.session_id;
-          this.dbManager.getSessionStore().ensureMemorySessionIdRegistered(
+          await this.dbManager.getStore().ensureMemorySessionIdRegistered(
             session.sessionDbId,
             message.session_id
           );
-          const verification = this.dbManager.getSessionStore().getSessionById(session.sessionDbId);
+          const verification = await this.dbManager.getStore().getSessionById(session.sessionDbId);
           const dbVerified = verification?.memory_session_id === message.session_id;
           const logMessage = previousId
             ? `MEMORY_ID_CHANGED | sessionDbId=${session.sessionDbId} | from=${previousId} | to=${message.session_id} | dbVerified=${dbVerified}`

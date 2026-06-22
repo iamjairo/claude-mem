@@ -319,12 +319,12 @@ export class SessionRoutes extends BaseRouteHandler {
       return;
     }
 
-    const store = this.dbManager.getSessionStore();
+    const store = this.dbManager.getStore();
 
-    const sessionDbId = store.createSDKSession(contentSessionId, '', '', undefined, platformSource);
-    const promptNumber = store.getPromptNumberFromUserPrompts(contentSessionId);
+    const sessionDbId = await store.createSDKSession(contentSessionId, '', '', undefined, platformSource);
+    const promptNumber = await store.getPromptNumberFromUserPrompts(contentSessionId);
 
-    const privacy = PrivacyCheckValidator.checkUserPromptPrivacy(
+    const privacy = await PrivacyCheckValidator.checkUserPromptPrivacy(
       store,
       contentSessionId,
       promptNumber,
@@ -355,8 +355,8 @@ export class SessionRoutes extends BaseRouteHandler {
       return this.badRequest(res, 'Missing contentSessionId query parameter');
     }
 
-    const store = this.dbManager.getSessionStore();
-    const sessionDbId = store.createSDKSession(contentSessionId, '', '');
+    const store = this.dbManager.getStore();
+    const sessionDbId = await store.createSDKSession(contentSessionId, '', '');
     const session = this.sessionManager.getSession(sessionDbId);
 
     if (!session) {
@@ -414,17 +414,17 @@ export class SessionRoutes extends BaseRouteHandler {
       customTitle
     });
 
-    const store = this.dbManager.getSessionStore();
+    const store = this.dbManager.getStore();
 
-    const sessionDbId = store.createSDKSession(contentSessionId, project, prompt, customTitle, platformSource);
+    const sessionDbId = await store.createSDKSession(contentSessionId, project, prompt, customTitle, platformSource);
 
-    const dbSession = store.getSessionById(sessionDbId);
+    const dbSession = await store.getSessionById(sessionDbId);
     const isNewSession = !dbSession?.memory_session_id;
     logger.info('SESSION', `CREATED | contentSessionId=${contentSessionId} → sessionDbId=${sessionDbId} | isNew=${isNewSession} | project=${project}`, {
       sessionId: sessionDbId
     });
 
-    const currentCount = store.getPromptNumberFromUserPrompts(contentSessionId);
+    const currentCount = await store.getPromptNumberFromUserPrompts(contentSessionId);
     const promptNumber = currentCount + 1;
 
     const memorySessionId = dbSession?.memory_session_id || null;
@@ -452,7 +452,7 @@ export class SessionRoutes extends BaseRouteHandler {
       return;
     }
 
-    const duplicatePrompt = store.findRecentDuplicateUserPrompt(
+    const duplicatePrompt = await store.findRecentDuplicateUserPrompt(
       contentSessionId,
       cleanedPrompt,
       USER_PROMPT_DEDUPE_WINDOW_MS
@@ -477,7 +477,7 @@ export class SessionRoutes extends BaseRouteHandler {
       return;
     }
 
-    store.saveUserPrompt(contentSessionId, promptNumber, cleanedPrompt);
+    await store.saveUserPrompt(contentSessionId, promptNumber, cleanedPrompt);
 
     const contextInjected = this.sessionManager.getSession(sessionDbId) !== undefined;
 
@@ -489,9 +489,9 @@ export class SessionRoutes extends BaseRouteHandler {
 
     if (platformSource !== 'cursor') {
       const sdkPrompt = cleanedPrompt.startsWith('/') ? cleanedPrompt.substring(1) : cleanedPrompt;
-      const session = this.sessionManager.initializeSession(sessionDbId, sdkPrompt, promptNumber);
+      const session = await this.sessionManager.initializeSession(sessionDbId, sdkPrompt, promptNumber);
 
-      const latestPrompt = store.getLatestUserPrompt(session.contentSessionId);
+      const latestPrompt = await store.getLatestUserPrompt(session.contentSessionId);
 
       if (latestPrompt) {
         this.eventBroadcaster.broadcastNewPrompt({

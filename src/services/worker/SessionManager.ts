@@ -25,7 +25,7 @@ export class SessionManager {
     this.onPendingMutate = cb;
   }
 
-  initializeSession(sessionDbId: number, currentUserPrompt?: string, promptNumber?: number): ActiveSession {
+  async initializeSession(sessionDbId: number, currentUserPrompt?: string, promptNumber?: number): Promise<ActiveSession> {
     logger.debug('SESSION', 'initializeSession called', {
       sessionDbId,
       promptNumber,
@@ -40,7 +40,7 @@ export class SessionManager {
         lastPromptNumber: session.lastPromptNumber
       });
 
-      const dbSession = this.dbManager.getSessionById(sessionDbId);
+      const dbSession = await this.dbManager.getSessionById(sessionDbId);
       if (dbSession.project && dbSession.project !== session.project) {
         logger.debug('SESSION', 'Updating project from database', {
           sessionDbId,
@@ -72,7 +72,7 @@ export class SessionManager {
       return session;
     }
 
-    const dbSession = this.dbManager.getSessionById(sessionDbId);
+    const dbSession = await this.dbManager.getSessionById(sessionDbId);
 
     logger.debug('SESSION', 'Fetched session from database', {
       sessionDbId,
@@ -104,6 +104,8 @@ export class SessionManager {
       });
     }
 
+    const resolvedPromptNumber = promptNumber ?? (await this.dbManager.getStore().getPromptNumberFromUserPrompts(dbSession.content_session_id));
+
     session = {
       sessionDbId,
       contentSessionId: dbSession.content_session_id,
@@ -114,7 +116,7 @@ export class SessionManager {
       pendingMessages: [],
       abortController: new AbortController(),
       generatorPromise: null,
-      lastPromptNumber: promptNumber || this.dbManager.getSessionStore().getPromptNumberFromUserPrompts(dbSession.content_session_id),
+      lastPromptNumber: resolvedPromptNumber,
       startTime: Date.now(),
       cumulativeInputTokens: 0,
       cumulativeOutputTokens: 0,
@@ -134,7 +136,7 @@ export class SessionManager {
       contentSessionId: dbSession.content_session_id,
       dbMemorySessionId: dbSession.memory_session_id || '(none in DB)',
       memorySessionId: '(cleared - will capture fresh from SDK)',
-      lastPromptNumber: promptNumber || this.dbManager.getSessionStore().getPromptNumberFromUserPrompts(dbSession.content_session_id)
+      lastPromptNumber: resolvedPromptNumber
     });
 
     this.sessions.set(sessionDbId, session);
@@ -157,7 +159,7 @@ export class SessionManager {
   async queueObservation(sessionDbId: number, data: ObservationData): Promise<void> {
     let session = this.sessions.get(sessionDbId);
     if (!session) {
-      session = this.initializeSession(sessionDbId);
+      session = await this.initializeSession(sessionDbId);
     }
 
     const message: PendingMessage = {
@@ -189,7 +191,7 @@ export class SessionManager {
   async queueSummarize(sessionDbId: number, lastAssistantMessage?: string): Promise<void> {
     let session = this.sessions.get(sessionDbId);
     if (!session) {
-      session = this.initializeSession(sessionDbId);
+      session = await this.initializeSession(sessionDbId);
     }
 
     const message: PendingMessage = {
@@ -404,7 +406,7 @@ export class SessionManager {
   async *getMessageIterator(sessionDbId: number): AsyncIterableIterator<PendingMessageWithId> {
     let session = this.sessions.get(sessionDbId);
     if (!session) {
-      session = this.initializeSession(sessionDbId);
+      session = await this.initializeSession(sessionDbId);
     }
 
     // Re-yield anything a prior generator pass claimed but did not confirm.

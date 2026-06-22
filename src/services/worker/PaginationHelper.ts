@@ -6,6 +6,8 @@ import { OBSERVER_SESSIONS_PROJECT } from '../../shared/paths.js';
 import { USER_PROMPT_DEDUPE_WINDOW_MS } from '../../shared/user-prompts.js';
 import type { PaginatedResult, Observation, Summary, UserPrompt } from '../worker-types.js';
 
+const MONGO_BACKEND = process.env.CLAUDE_MEM_DB_BACKEND === 'mongodb';
+
 export class PaginationHelper {
   private dbManager: DatabaseManager;
 
@@ -53,6 +55,10 @@ export class PaginationHelper {
   }
 
   getObservations(offset: number, limit: number, project?: string, platformSource?: string): PaginatedResult<Observation> {
+    if (MONGO_BACKEND) {
+      // Sync shim — MongoDB pagination is done via getStore().getPaginatedObservations() in route handlers
+      throw new Error('PaginationHelper.getObservations() not supported in MongoDB mode — use getStore().getPaginatedObservations()');
+    }
     const db = this.dbManager.getSessionStore().db;
     let query = `
       SELECT
@@ -112,6 +118,9 @@ export class PaginationHelper {
   }
 
   getSummaries(offset: number, limit: number, project?: string, platformSource?: string): PaginatedResult<Summary> {
+    if (MONGO_BACKEND) {
+      throw new Error('PaginationHelper.getSummaries() not supported in MongoDB mode — use getStore().getPaginatedSummaries()');
+    }
     const db = this.dbManager.getSessionStore().db;
 
     let query = `
@@ -166,6 +175,9 @@ export class PaginationHelper {
   }
 
   getPrompts(offset: number, limit: number, project?: string, platformSource?: string): PaginatedResult<UserPrompt> {
+    if (MONGO_BACKEND) {
+      throw new Error('PaginationHelper.getPrompts() not supported in MongoDB mode — use getStore().getPaginatedPrompts()');
+    }
     const db = this.dbManager.getSessionStore().db;
 
     let query = `

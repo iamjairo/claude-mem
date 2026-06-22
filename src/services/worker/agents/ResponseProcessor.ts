@@ -137,8 +137,8 @@ export async function processAgentResponse(
   const { observations, summary } = parsed;
   const summaryForStore = normalizeSummaryForStorage(summary);
 
-  const sessionStore = dbManager.getSessionStore();
-  sessionStore.ensureMemorySessionIdRegistered(session.sessionDbId, session.memorySessionId, getWorkerPort());
+  const store = dbManager.getStore();
+  await store.ensureMemorySessionIdRegistered(session.sessionDbId, session.memorySessionId, getWorkerPort());
 
   logger.info('DB', `STORING | sessionDbId=${session.sessionDbId} | memorySessionId=${session.memorySessionId} | obsCount=${observations.length} | hasSummary=${!!summaryForStore}`, {
     sessionId: session.sessionDbId,
@@ -151,9 +151,9 @@ export async function processAgentResponse(
     agent_id: session.pendingAgentId ?? null
   }));
 
-  let result: ReturnType<typeof sessionStore.storeObservations>;
+  let result: Awaited<ReturnType<typeof store.storeObservations>>;
   try {
-    result = sessionStore.storeObservations(
+    result = await store.storeObservations(
       session.memorySessionId,
       session.project,
       labeledObservations,

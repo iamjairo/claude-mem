@@ -27,7 +27,7 @@ export class CorpusBuilder {
   private renderer: CorpusRenderer;
 
   constructor(
-    private sessionStore: SessionStore,
+    private sessionStore: SessionStore | null,
     private searchOrchestrator: SearchOrchestrator,
     private corpusStore: CorpusStore
   ) {
@@ -62,7 +62,7 @@ export class CorpusBuilder {
     if (filter.types && filter.types.length > 0) hydrateOptions.type = filter.types;
     if (filter.limit) hydrateOptions.limit = filter.limit;
 
-    const observationRows = observationIds.length > 0
+    const observationRows = observationIds.length > 0 && this.sessionStore
       ? this.sessionStore.getObservationsByIds(observationIds, hydrateOptions)
       : [];
 

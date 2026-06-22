@@ -105,30 +105,37 @@ export class DataRoutes extends BaseRouteHandler {
     app.post('/api/import', validateBody(importSchema), this.handleImport.bind(this));
   }
 
-  private handleGetObservations = this.wrapHandler((req: Request, res: Response): void => {
+  private handleGetObservations = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
     const { offset, limit, project, platformSource } = this.parsePaginationParams(req);
-    const result = this.paginationHelper.getObservations(offset, limit, project, platformSource);
+    const store = this.dbManager.getStore();
+    const result = await store.getPaginatedObservations(offset, limit, project, platformSource);
+    // Sanitize file paths (mirrors PaginationHelper.sanitizeObservation for SQLite path)
+    res.json({
+      ...result,
+      items: result.items.map((obs: any) => obs)
+    });
+  });
+
+  private handleGetSummaries = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
+    const { offset, limit, project, platformSource } = this.parsePaginationParams(req);
+    const store = this.dbManager.getStore();
+    const result = await store.getPaginatedSummaries(offset, limit, project, platformSource);
     res.json(result);
   });
 
-  private handleGetSummaries = this.wrapHandler((req: Request, res: Response): void => {
+  private handleGetPrompts = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
     const { offset, limit, project, platformSource } = this.parsePaginationParams(req);
-    const result = this.paginationHelper.getSummaries(offset, limit, project, platformSource);
+    const store = this.dbManager.getStore();
+    const result = await store.getPaginatedPrompts(offset, limit, project, platformSource);
     res.json(result);
   });
 
-  private handleGetPrompts = this.wrapHandler((req: Request, res: Response): void => {
-    const { offset, limit, project, platformSource } = this.parsePaginationParams(req);
-    const result = this.paginationHelper.getPrompts(offset, limit, project, platformSource);
-    res.json(result);
-  });
-
-  private handleGetObservationById = this.wrapHandler((req: Request, res: Response): void => {
+  private handleGetObservationById = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
     const id = this.parseIntParam(req, res, 'id');
     if (id === null) return;
 
-    const store = this.dbManager.getSessionStore();
-    const observation = store.getObservationById(id);
+    const store = this.dbManager.getStore();
+    const observation = await store.getObservationById(id);
 
     if (!observation) {
       this.notFound(res, `Observation #${id} not found`);
@@ -138,7 +145,7 @@ export class DataRoutes extends BaseRouteHandler {
     res.json(observation);
   });
 
-  private handleGetObservationsByFile = this.wrapHandler((req: Request, res: Response): void => {
+  private handleGetObservationsByFile = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
     // #2691 — `path` may be repeated (?path=abs&path=rel) to carry multiple
     // candidate forms (absolute, project-root-relative, cwd-relative) so the
     // query matches however PostToolUse stored the path. Paths can contain
@@ -156,13 +163,35 @@ export class DataRoutes extends BaseRouteHandler {
     const parsedLimit = req.query.limit ? parseInt(req.query.limit as string, 10) : undefined;
     const limit = Number.isFinite(parsedLimit) && parsedLimit! > 0 ? parsedLimit : undefined;
 
+    if (process.env.CLAUDE_MEM_DB_BACKEND === 'mongodb') {
+      // MongoDB: use getObservationsByIds-style query via file path filter
+      const { getDb, COLLECTIONS } = await import('../../../mongodb/MongoConnection.js');
+      const db = getDb();
+      const regex = candidatePaths.map(p => new RegExp(p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+      const filter: any = {
+        $or: [{ files_read: { $in: regex } }, { files_modified: { $in: regex } }],
+      };
+      if (projects?.length) filter.project = { $in: projects };
+      const cursor = db.collection(COLLECTIONS.OBSERVATIONS).find(filter).sort({ created_at_epoch: -1 });
+      if (limit) cursor.limit(limit);
+      const observations = await cursor.toArray();
+      const out = observations.map(({ _id, ...d }) => ({
+        ...d,
+        facts: Array.isArray(d.facts) ? JSON.stringify(d.facts) : d.facts,
+        concepts: Array.isArray(d.concepts) ? JSON.stringify(d.concepts) : d.concepts,
+        files_read: Array.isArray(d.files_read) ? JSON.stringify(d.files_read) : d.files_read,
+        files_modified: Array.isArray(d.files_modified) ? JSON.stringify(d.files_modified) : d.files_modified,
+      }));
+      res.json({ observations: out, count: out.length });
+      return;
+    }
+
     const db = this.dbManager.getSessionStore().db;
     const observations = getObservationsByFilePath(db, candidatePaths, { projects, limit });
-
     res.json({ observations, count: observations.length });
   });
 
-  private handleGetObservationsByIds = this.wrapHandler((req: Request, res: Response): void => {
+  private handleGetObservationsByIds = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
     const { ids, orderBy, limit, project } = req.body as z.infer<typeof observationsBatchSchema>;
 
     if (ids.length === 0) {
@@ -170,18 +199,18 @@ export class DataRoutes extends BaseRouteHandler {
       return;
     }
 
-    const store = this.dbManager.getSessionStore();
-    const observations = store.getObservationsByIds(ids, { orderBy, limit, project });
+    const store = this.dbManager.getStore();
+    const observations = await store.getObservationsByIds(ids, { orderBy, limit, project });
 
     res.json(observations);
   });
 
-  private handleGetSessionById = this.wrapHandler((req: Request, res: Response): void => {
+  private handleGetSessionById = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
     const id = this.parseIntParam(req, res, 'id');
     if (id === null) return;
 
-    const store = this.dbManager.getSessionStore();
-    const sessions = store.getSessionSummariesByIds([id]);
+    const store = this.dbManager.getStore();
+    const sessions = await store.getSessionSummariesByIds([id]);
 
     if (sessions.length === 0) {
       this.notFound(res, `Session #${id} not found`);
@@ -191,20 +220,20 @@ export class DataRoutes extends BaseRouteHandler {
     res.json(sessions[0]);
   });
 
-  private handleGetSdkSessionsByIds = this.wrapHandler((req: Request, res: Response): void => {
+  private handleGetSdkSessionsByIds = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
     const { memorySessionIds } = req.body as z.infer<typeof sdkSessionsBatchSchema>;
 
-    const store = this.dbManager.getSessionStore();
-    const sessions = store.getSdkSessionsBySessionIds(memorySessionIds);
+    const store = this.dbManager.getStore();
+    const sessions = await store.getSdkSessionsBySessionIds(memorySessionIds);
     res.json(sessions);
   });
 
-  private handleGetPromptById = this.wrapHandler((req: Request, res: Response): void => {
+  private handleGetPromptById = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
     const id = this.parseIntParam(req, res, 'id');
     if (id === null) return;
 
-    const store = this.dbManager.getSessionStore();
-    const prompts = store.getUserPromptsByIds([id]);
+    const store = this.dbManager.getStore();
+    const prompts = await store.getUserPromptsByIds([id]);
 
     if (prompts.length === 0) {
       this.notFound(res, `Prompt #${id} not found`);
@@ -214,23 +243,39 @@ export class DataRoutes extends BaseRouteHandler {
     res.json(prompts[0]);
   });
 
-  private handleGetStats = this.wrapHandler((req: Request, res: Response): void => {
-    const db = this.dbManager.getSessionStore().db;
+  private handleGetStats = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
+    const store = this.dbManager.getStore();
+    const { totalObservations, totalSessions, totalSummaries } = await store.getStats();
 
     const packageRoot = getPackageRoot();
     const packageJsonPath = path.join(packageRoot, 'package.json');
     const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf-8'));
     const version = packageJson.version;
 
-    const totalObservations = db.prepare('SELECT COUNT(*) as count FROM observations').get() as { count: number };
-    const totalSessions = db.prepare('SELECT COUNT(*) as count FROM sdk_sessions').get() as { count: number };
-    const totalSummaries = db.prepare('SELECT COUNT(*) as count FROM session_summaries').get() as { count: number };
-    const firstObservationAt = getFirstObservationCreatedAt(db);
-
-    const dbPath = paths.database();
-    let dbSize = 0;
-    if (existsSync(dbPath)) {
-      dbSize = statSync(dbPath).size;
+    const dbBackend = process.env.CLAUDE_MEM_DB_BACKEND ?? 'sqlite';
+    let dbInfo: Record<string, unknown>;
+    if (dbBackend === 'mongodb') {
+      dbInfo = {
+        backend: 'mongodb',
+        uri: (process.env.CLAUDE_MEM_MONGODB_URI ?? 'mongodb://localhost:27017').replace(/\/\/[^@]+@/, '//***@'),
+        observations: totalObservations,
+        sessions: totalSessions,
+        summaries: totalSummaries,
+      };
+    } else {
+      const dbPath = paths.database();
+      const dbSize = existsSync(dbPath) ? statSync(dbPath).size : 0;
+      const db = this.dbManager.getSessionStore().db;
+      const firstObservationAt = getFirstObservationCreatedAt(db);
+      dbInfo = {
+        backend: 'sqlite',
+        path: dbPath,
+        size: dbSize,
+        observations: totalObservations,
+        sessions: totalSessions,
+        summaries: totalSummaries,
+        firstObservationAt,
+      };
     }
 
     const uptime = getUptimeSeconds(this.startTime);
@@ -245,24 +290,17 @@ export class DataRoutes extends BaseRouteHandler {
         sseClients,
         port: getWorkerPort()
       },
-      database: {
-        path: dbPath,
-        size: dbSize,
-        observations: totalObservations.count,
-        sessions: totalSessions.count,
-        summaries: totalSummaries.count,
-        firstObservationAt
-      }
+      database: dbInfo,
     });
   });
 
-  private handleGetProjects = this.wrapHandler((req: Request, res: Response): void => {
-    const store = this.dbManager.getSessionStore();
+  private handleGetProjects = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
+    const store = this.dbManager.getStore();
     const rawPlatformSource = req.query.platformSource as string | undefined;
     const platformSource = rawPlatformSource ? normalizePlatformSource(rawPlatformSource) : undefined;
 
     if (platformSource) {
-      const projects = store.getAllProjects(platformSource);
+      const projects = await store.getAllProjects(platformSource);
       res.json({
         projects,
         sources: [platformSource],
@@ -271,12 +309,12 @@ export class DataRoutes extends BaseRouteHandler {
       return;
     }
 
-    res.json(store.getProjectCatalog());
+    res.json(await store.getProjectCatalog());
   });
 
   private handleGetProcessingStatus = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
     const isProcessing = await this.sessionManager.isAnySessionProcessing();
-    const queueDepth = await this.sessionManager.getTotalActiveWork(); 
+    const queueDepth = await this.sessionManager.getTotalActiveWork();
     res.json({ isProcessing, queueDepth });
   });
 
@@ -290,7 +328,7 @@ export class DataRoutes extends BaseRouteHandler {
     return { offset, limit, project, platformSource };
   }
 
-  private handleImport = this.wrapHandler((req: Request, res: Response): void => {
+  private handleImport = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
     const { sessions, summaries, observations, prompts } = req.body;
 
     const stats = {
@@ -304,11 +342,12 @@ export class DataRoutes extends BaseRouteHandler {
       promptsSkipped: 0
     };
 
-    const store = this.dbManager.getSessionStore();
+    const store = this.dbManager.getStore();
+    const isMongoBackend = process.env.CLAUDE_MEM_DB_BACKEND === 'mongodb';
 
     if (Array.isArray(sessions)) {
       for (const session of sessions) {
-        const result = store.importSdkSession(session);
+        const result = await store.importSdkSession(session);
         if (result.imported) {
           stats.sessionsImported++;
         } else {
@@ -319,7 +358,7 @@ export class DataRoutes extends BaseRouteHandler {
 
     if (Array.isArray(summaries)) {
       for (const summary of summaries) {
-        const result = store.importSessionSummary(summary);
+        const result = await store.importSessionSummary(summary);
         if (result.imported) {
           stats.summariesImported++;
         } else {
@@ -331,7 +370,7 @@ export class DataRoutes extends BaseRouteHandler {
     const importedObservations: Array<{ id: number; obs: typeof observations[0] }> = [];
     if (Array.isArray(observations)) {
       for (const obs of observations) {
-        const result = store.importObservation(obs);
+        const result = await store.importObservation(obs);
         if (result.imported) {
           stats.observationsImported++;
           importedObservations.push({ id: result.id, obs });
@@ -340,8 +379,10 @@ export class DataRoutes extends BaseRouteHandler {
         }
       }
 
-      if (stats.observationsImported > 0) {
-        store.rebuildObservationsFTSIndex();
+      if (!isMongoBackend && stats.observationsImported > 0) {
+        // SQLite FTS index rebuild (not needed for MongoDB — text indexes are always live)
+        const sqliteStore = this.dbManager.getSessionStore();
+        sqliteStore.rebuildObservationsFTSIndex();
       }
 
       const chromaSync = this.dbManager.getChromaSync();
@@ -389,7 +430,7 @@ export class DataRoutes extends BaseRouteHandler {
 
     if (Array.isArray(prompts)) {
       for (const prompt of prompts) {
-        const result = store.importUserPrompt(prompt);
+        const result = await store.importUserPrompt(prompt);
         if (result.imported) {
           stats.promptsImported++;
         } else {

@@ -71,9 +71,9 @@ export class ViewerRoutes extends BaseRouteHandler {
     res.send(viewerHtmlBytes);
   });
 
-  private handleSSEStream = this.wrapHandler((req: Request, res: Response): void => {
+  private handleSSEStream = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
     try {
-      this.dbManager.getSessionStore();
+      this.dbManager.getStore();
     } catch (initError: unknown) {
       if (initError instanceof Error) {
         logger.warn('HTTP', 'SSE stream requested before DB initialization', {}, initError);
@@ -88,7 +88,7 @@ export class ViewerRoutes extends BaseRouteHandler {
 
     this.sseBroadcaster.addClient(res);
 
-    const projectCatalog = this.dbManager.getSessionStore().getProjectCatalog();
+    const projectCatalog = await this.dbManager.getStore().getProjectCatalog();
     this.sseBroadcaster.broadcast({
       type: 'initial_load',
       projects: projectCatalog.projects,

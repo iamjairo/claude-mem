@@ -84,13 +84,13 @@ export async function ingestObservation(payload: ObservationPayload): Promise<In
     }
   }
 
-  const store = dbManager.getSessionStore();
+  const store = dbManager.getStore();
 
   let sessionDbId: number;
   let promptNumber: number;
   try {
-    sessionDbId = store.createSDKSession(payload.contentSessionId, project, '', undefined, platformSource);
-    promptNumber = store.getPromptNumberFromUserPrompts(payload.contentSessionId);
+    sessionDbId = await store.createSDKSession(payload.contentSessionId, project, '', undefined, platformSource);
+    promptNumber = await store.getPromptNumberFromUserPrompts(payload.contentSessionId);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger.error('INGEST', 'Observation session resolution failed', {
@@ -100,7 +100,7 @@ export async function ingestObservation(payload: ObservationPayload): Promise<In
     return { ok: false, reason: message, status: 500 };
   }
 
-  const privacy = PrivacyCheckValidator.checkUserPromptPrivacy(
+  const privacy = await PrivacyCheckValidator.checkUserPromptPrivacy(
     store,
     payload.contentSessionId,
     promptNumber,
@@ -172,7 +172,7 @@ export async function ingestSummary(payload: SummaryPayload): Promise<IngestResu
 
     let sessionDbId: number;
     try {
-      sessionDbId = dbManager.getSessionStore().createSDKSession(payload.contentSessionId, project, '', undefined, platformSource);
+      sessionDbId = await dbManager.getStore().createSDKSession(payload.contentSessionId, project, '', undefined, platformSource);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return { ok: false, reason: message, status: 500 };

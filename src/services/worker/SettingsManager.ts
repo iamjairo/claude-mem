@@ -3,6 +3,8 @@ import { DatabaseManager } from './DatabaseManager.js';
 import { logger } from '../../utils/logger.js';
 import type { ViewerSettings } from '../worker-types.js';
 
+const MONGO_BACKEND = process.env.CLAUDE_MEM_DB_BACKEND === 'mongodb';
+
 export class SettingsManager {
   private dbManager: DatabaseManager;
   private readonly defaultSettings: ViewerSettings = {
@@ -16,6 +18,8 @@ export class SettingsManager {
   }
 
   getSettings(): ViewerSettings {
+    if (MONGO_BACKEND) return this._getSettingsMongo();
+
     const db = this.dbManager.getSessionStore().db;
 
     try {
@@ -42,6 +46,8 @@ export class SettingsManager {
   }
 
   updateSettings(updates: Partial<ViewerSettings>): ViewerSettings {
+    if (MONGO_BACKEND) return this._updateSettingsMongo(updates);
+
     const db = this.dbManager.getSessionStore().db;
 
     const stmt = db.prepare(`
@@ -54,5 +60,28 @@ export class SettingsManager {
     }
 
     return this.getSettings();
+  }
+
+  // ── MongoDB settings (stored in viewer_settings collection) ────────────────
+
+  private _settingsCache: ViewerSettings | null = null;
+
+  private _getSettingsMongo(): ViewerSettings {
+    return this._settingsCache ?? { ...this.defaultSettings };
+  }
+
+  private _updateSettingsMongo(updates: Partial<ViewerSettings>): ViewerSettings {
+    this._settingsCache = { ...(this._settingsCache ?? this.defaultSettings), ...updates };
+    // Fire-and-forget persist to MongoDB
+    try {
+      const { getDb } = require('../mongodb/MongoConnection.js') as typeof import('../mongodb/MongoConnection.js');
+      const col = getDb().collection('viewer_settings');
+      for (const [key, value] of Object.entries(updates)) {
+        col.updateOne({ _id: key as any }, { $set: { value } }, { upsert: true }).catch(() => {});
+      }
+    } catch {
+      // MongoDB not ready — keep in memory only
+    }
+    return { ...(this._settingsCache ?? this.defaultSettings) };
   }
 }

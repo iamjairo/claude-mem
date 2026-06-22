@@ -88,12 +88,14 @@ export class SearchRoutes extends BaseRouteHandler {
   }
 
   private projectsHaveObservations(
-    sessionStore: ReturnType<SearchManager['getSessionStore']>,
+    sessionStore: ReturnType<SearchManager['getSessionStore']> | null,
     projects: string[],
   ): boolean {
     if (projects.every(p => this.projectsKnownNonEmpty.has(p))) {
       return true;
     }
+    // In MongoDB mode, sessionStore is null — assume observations exist (skip welcome hint)
+    if (!sessionStore) return true;
     const observationCount = countObservationsByProjects(sessionStore, projects);
     if (observationCount > 0) {
       for (const p of projects) this.projectsKnownNonEmpty.add(p);

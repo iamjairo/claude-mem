@@ -90,7 +90,7 @@ export abstract class OpenAICompatibleProvider<TConfig extends { apiKey: string;
     if (!session.memorySessionId) {
       const syntheticMemorySessionId = `${this.syntheticIdPrefix}-${session.contentSessionId}-${Date.now()}`;
       session.memorySessionId = syntheticMemorySessionId;
-      this.dbManager.getSessionStore().updateMemorySessionId(session.sessionDbId, syntheticMemorySessionId);
+      void this.dbManager.getStore().updateMemorySessionId(session.sessionDbId, syntheticMemorySessionId);
       logger.info('SESSION', `MEMORY_ID_GENERATED | sessionDbId=${session.sessionDbId} | provider=${this.providerName}`);
     }
 

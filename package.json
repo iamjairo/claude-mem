@@ -146,7 +146,8 @@
     "shell-quote": "^1.8.3",
     "yaml": "^2.8.4",
     "zod": "^4.4.3",
-    "zod-to-json-schema": "^3.25.2"
+    "zod-to-json-schema": "^3.25.2",
+    "mongodb": "^6.8.0"
   },
   "overrides": {
     "tmp": "^0.2.7"

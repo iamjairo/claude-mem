@@ -57,7 +57,7 @@ export class SearchManager {
     return this.formatter;
   }
 
-  getSessionStore(): SessionStore {
+  getSessionStore(): SessionStore | null {
     return this.sessionStore;
   }
 
