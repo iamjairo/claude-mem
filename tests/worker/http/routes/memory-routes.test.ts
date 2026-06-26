@@ -73,7 +73,7 @@ describe('MemoryRoutes — POST /api/memory/save (#2116)', () => {
     mockGetOrCreateManualSession = mock((project: string) => `manual-${project}`);
 
     const mockDbManager = {
-      getSessionStore: () => ({
+      getStore: () => ({
         storeObservation: mockStoreObservation,
         getOrCreateManualSession: mockGetOrCreateManualSession,
       }),

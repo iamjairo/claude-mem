@@ -50,7 +50,7 @@ function makeDbManager(): DatabaseManager {
       user_prompt: 'do the thing',
       memory_session_id: null,
     }),
-    getSessionStore: () => ({
+    getStore: () => ({
       getPromptNumberFromUserPrompts: () => 1,
       ensureMemorySessionIdRegistered: () => {},
       storeObservations: () => ({ observationIds: [], summaryId: null, createdAtEpoch: 0 }),

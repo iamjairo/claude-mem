@@ -63,7 +63,7 @@ describe('ResponseProcessor', () => {
     mockChromaSyncSummary = mock(() => Promise.resolve());
 
     mockDbManager = {
-      getSessionStore: () => ({
+      getStore: () => ({
         storeObservations: mockStoreObservations,
         ensureMemorySessionIdRegistered: mock(() => {}),  // FK fix (Issue #846)
         getSessionById: mock(() => ({ memory_session_id: 'memory-session-456' })),  // FK fix (Issue #846)
@@ -290,7 +290,7 @@ describe('ResponseProcessor', () => {
         summaryId: null,
         createdAtEpoch: 1700000000000,
       }));
-      (mockDbManager.getSessionStore as any) = () => ({
+      (mockDbManager.getStore as any) = () => ({
         storeObservations: mockStoreObservations,
         ensureMemorySessionIdRegistered: mock(() => {}),
         getSessionById: mock(() => ({ memory_session_id: 'memory-session-456' })),
@@ -387,7 +387,7 @@ describe('ResponseProcessor', () => {
         summaryId: null,
         createdAtEpoch: 1700000000000,
       }));
-      (mockDbManager.getSessionStore as any) = () => ({
+      (mockDbManager.getStore as any) = () => ({
         storeObservations: mockStoreObservations,
         ensureMemorySessionIdRegistered: mock(() => {}),
         getSessionById: mock(() => ({ memory_session_id: 'memory-session-456' })),
@@ -421,7 +421,7 @@ describe('ResponseProcessor', () => {
         summaryId: 99,
         createdAtEpoch: 1700000000000,
       } as StorageResult));
-      (mockDbManager.getSessionStore as any) = () => ({
+      (mockDbManager.getStore as any) = () => ({
         storeObservations: mockStoreObservations,
         ensureMemorySessionIdRegistered: mock(() => {}),
         getSessionById: mock(() => ({ memory_session_id: 'memory-session-456' })),
@@ -522,7 +522,7 @@ describe('ResponseProcessor', () => {
         summaryId: null,
         createdAtEpoch: 1700000000000,
       }));
-      (mockDbManager.getSessionStore as any) = () => ({
+      (mockDbManager.getStore as any) = () => ({
         storeObservations: mockStoreObservations,
         ensureMemorySessionIdRegistered: mock(() => {}),
         getSessionById: mock(() => ({ memory_session_id: 'memory-session-456' })),
@@ -560,7 +560,7 @@ describe('ResponseProcessor', () => {
         summaryId: null,
         createdAtEpoch: 1700000000000,
       }));
-      (mockDbManager.getSessionStore as any) = () => ({
+      (mockDbManager.getStore as any) = () => ({
         storeObservations: mockStoreObservations,
         ensureMemorySessionIdRegistered: mock(() => {}),
         getSessionById: mock(() => ({ memory_session_id: 'memory-session-456' })),
@@ -602,7 +602,7 @@ describe('ResponseProcessor', () => {
         summaryId: null,
         createdAtEpoch: 1700000000000,
       }));
-      (mockDbManager.getSessionStore as any) = () => ({
+      (mockDbManager.getStore as any) = () => ({
         storeObservations: mockStoreObservations,
         ensureMemorySessionIdRegistered: mock(() => {}),
         getSessionById: mock(() => ({ memory_session_id: 'memory-session-456' })),

@@ -6,26 +6,26 @@ function storeReturning(value: string | null) {
 }
 
 describe('PrivacyCheckValidator (issue #2794)', () => {
-  it('ALLOWS ingestion when the user_prompts row is absent (null) — not a privacy signal', () => {
-    const d = PrivacyCheckValidator.checkUserPromptPrivacy(
+  it('ALLOWS ingestion when the user_prompts row is absent (null) — not a privacy signal', async () => {
+    const d = await PrivacyCheckValidator.checkUserPromptPrivacy(
       storeReturning(null), 'session-x', 0, 'observation', 1
     );
     expect(d.allow).toBe(true);
     if (d.allow) expect(d.prompt).toBe('');
   });
 
-  it('SUPPRESSES when the row exists but is empty after privacy stripping', () => {
-    expect(PrivacyCheckValidator.checkUserPromptPrivacy(
+  it('SUPPRESSES when the row exists but is empty after privacy stripping', async () => {
+    expect((await PrivacyCheckValidator.checkUserPromptPrivacy(
       storeReturning(''), 'session-x', 1, 'observation', 1
-    ).allow).toBe(false);
+    )).allow).toBe(false);
 
-    expect(PrivacyCheckValidator.checkUserPromptPrivacy(
+    expect((await PrivacyCheckValidator.checkUserPromptPrivacy(
       storeReturning('   \n  '), 'session-x', 1, 'summarize', 1
-    ).allow).toBe(false);
+    )).allow).toBe(false);
   });
 
-  it('ALLOWS and returns the prompt when present and non-empty', () => {
-    const d = PrivacyCheckValidator.checkUserPromptPrivacy(
+  it('ALLOWS and returns the prompt when present and non-empty', async () => {
+    const d = await PrivacyCheckValidator.checkUserPromptPrivacy(
       storeReturning('fix the bug'), 'session-x', 1, 'observation', 1
     );
     expect(d.allow).toBe(true);

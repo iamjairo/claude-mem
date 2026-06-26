@@ -95,7 +95,7 @@ describe('GeminiProvider', () => {
     };
 
     mockDbManager = {
-      getSessionStore: () => mockSessionStore,
+      getStore: () => mockSessionStore,
       getChromaSync: () => mockChromaSync
     } as unknown as DatabaseManager;
 

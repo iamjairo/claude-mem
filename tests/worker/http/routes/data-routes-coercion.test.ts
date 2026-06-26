@@ -68,7 +68,7 @@ describe('DataRoutes Type Coercion', () => {
     mockGetSdkSessionsBySessionIds = mock(() => [{ id: 'abc' }]);
 
     const mockDbManager = {
-      getSessionStore: () => ({
+      getStore: () => ({
         getObservationsByIds: mockGetObservationsByIds,
         getSdkSessionsBySessionIds: mockGetSdkSessionsBySessionIds,
       }),
