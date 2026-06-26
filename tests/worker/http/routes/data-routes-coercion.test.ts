@@ -25,9 +25,9 @@ function createMockReqRes(body: any): { req: Partial<Request>; res: Partial<Resp
   };
 }
 
-function captureChain(mockApp: any, targetPath: string): (req: Request, res: Response) => void {
+function captureChain(mockApp: any, targetPath: string): (req: Request, res: Response) => Promise<void> {
   let middleware: (req: Request, res: Response, next: () => void) => void;
-  let handler: (req: Request, res: Response) => void;
+  let handler: (req: Request, res: Response) => Promise<void>;
   mockApp.post = mock((path: string, ...rest: any[]) => {
     if (path !== targetPath) return;
     if (rest.length === 1) {
@@ -37,16 +37,16 @@ function captureChain(mockApp: any, targetPath: string): (req: Request, res: Res
       handler = rest[1];
     }
   });
-  return (req: Request, res: Response): void => {
+  return async (req: Request, res: Response): Promise<void> => {
     if (!middleware) {
-      handler(req, res);
+      await handler(req, res);
       return;
     }
     let nextCalled = false;
     middleware(req, res, () => {
       nextCalled = true;
     });
-    if (nextCalled) handler(req, res);
+    if (nextCalled) await handler(req, res);
   };
 }
 
@@ -90,7 +90,7 @@ describe('DataRoutes Type Coercion', () => {
   });
 
   describe('handleGetObservationsByIds — ids coercion', () => {
-    let handler: (req: Request, res: Response) => void;
+    let handler: (req: Request, res: Response) => Promise<void>;
 
     beforeEach(() => {
       const mockApp: any = {
@@ -102,25 +102,25 @@ describe('DataRoutes Type Coercion', () => {
       routes.setupRoutes(mockApp as any);
     });
 
-    it('should accept a native array of numbers', () => {
+    it('should accept a native array of numbers', async () => {
       const { req, res, jsonSpy } = createMockReqRes({ ids: [1, 2, 3] });
-      handler(req as Request, res as Response);
+      await handler(req as Request, res as Response);
 
       expect(mockGetObservationsByIds).toHaveBeenCalledWith([1, 2, 3], expect.anything());
       expect(jsonSpy).toHaveBeenCalled();
     });
 
-    it('should coerce a JSON-encoded string array "[1,2,3]" to native array', () => {
+    it('should coerce a JSON-encoded string array "[1,2,3]" to native array', async () => {
       const { req, res, jsonSpy } = createMockReqRes({ ids: '[1,2,3]' });
-      handler(req as Request, res as Response);
+      await handler(req as Request, res as Response);
 
       expect(mockGetObservationsByIds).toHaveBeenCalledWith([1, 2, 3], expect.anything());
       expect(jsonSpy).toHaveBeenCalled();
     });
 
-    it('should coerce a comma-separated string "1,2,3" to native array', () => {
+    it('should coerce a comma-separated string "1,2,3" to native array', async () => {
       const { req, res, jsonSpy } = createMockReqRes({ ids: '1,2,3' });
-      handler(req as Request, res as Response);
+      await handler(req as Request, res as Response);
 
       expect(mockGetObservationsByIds).toHaveBeenCalledWith([1, 2, 3], expect.anything());
       expect(jsonSpy).toHaveBeenCalled();
@@ -149,7 +149,7 @@ describe('DataRoutes Type Coercion', () => {
   });
 
   describe('handleGetSdkSessionsByIds — memorySessionIds coercion', () => {
-    let handler: (req: Request, res: Response) => void;
+    let handler: (req: Request, res: Response) => Promise<void>;
 
     beforeEach(() => {
       const mockApp: any = {
@@ -161,52 +161,52 @@ describe('DataRoutes Type Coercion', () => {
       routes.setupRoutes(mockApp as any);
     });
 
-    it('should accept a native array of strings', () => {
+    it('should accept a native array of strings', async () => {
       const { req, res, jsonSpy } = createMockReqRes({ memorySessionIds: ['abc', 'def'] });
-      handler(req as Request, res as Response);
+      await handler(req as Request, res as Response);
 
       expect(mockGetSdkSessionsBySessionIds).toHaveBeenCalledWith(['abc', 'def']);
       expect(jsonSpy).toHaveBeenCalled();
     });
 
-    it('should coerce a JSON-encoded string array to native array', () => {
+    it('should coerce a JSON-encoded string array to native array', async () => {
       const { req, res, jsonSpy } = createMockReqRes({ memorySessionIds: '["abc","def"]' });
-      handler(req as Request, res as Response);
+      await handler(req as Request, res as Response);
 
       expect(mockGetSdkSessionsBySessionIds).toHaveBeenCalledWith(['abc', 'def']);
       expect(jsonSpy).toHaveBeenCalled();
     });
 
-    it('should coerce a comma-separated string to native array', () => {
+    it('should coerce a comma-separated string to native array', async () => {
       const { req, res, jsonSpy } = createMockReqRes({ memorySessionIds: 'abc,def' });
-      handler(req as Request, res as Response);
+      await handler(req as Request, res as Response);
 
       expect(mockGetSdkSessionsBySessionIds).toHaveBeenCalledWith(['abc', 'def']);
       expect(jsonSpy).toHaveBeenCalled();
     });
 
-    it('should trim whitespace from comma-separated values', () => {
+    it('should trim whitespace from comma-separated values', async () => {
       const { req, res, jsonSpy } = createMockReqRes({ memorySessionIds: 'abc, def , ghi' });
-      handler(req as Request, res as Response);
+      await handler(req as Request, res as Response);
 
       expect(mockGetSdkSessionsBySessionIds).toHaveBeenCalledWith(['abc', 'def', 'ghi']);
       expect(jsonSpy).toHaveBeenCalled();
     });
 
-    it('should accept legacy sdkSessionIds as a compatibility alias', () => {
+    it('should accept legacy sdkSessionIds as a compatibility alias', async () => {
       const { req, res, jsonSpy } = createMockReqRes({ sdkSessionIds: ['abc', 'def'] });
-      handler(req as Request, res as Response);
+      await handler(req as Request, res as Response);
 
       expect(mockGetSdkSessionsBySessionIds).toHaveBeenCalledWith(['abc', 'def']);
       expect(jsonSpy).toHaveBeenCalled();
     });
 
-    it('should prefer canonical memorySessionIds when both fields are provided', () => {
+    it('should prefer canonical memorySessionIds when both fields are provided', async () => {
       const { req, res, jsonSpy } = createMockReqRes({
         memorySessionIds: ['canonical'],
         sdkSessionIds: ['legacy'],
       });
-      handler(req as Request, res as Response);
+      await handler(req as Request, res as Response);
 
       expect(mockGetSdkSessionsBySessionIds).toHaveBeenCalledWith(['canonical']);
       expect(jsonSpy).toHaveBeenCalled();

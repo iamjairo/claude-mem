@@ -7,13 +7,10 @@ import { instrument } from '../../telemetry/instrument.js';
 export abstract class BaseRouteHandler {
   protected wrapHandler(
     handler: (req: Request, res: Response) => void | Promise<void>
-  ): (req: Request, res: Response) => void {
-    return (req: Request, res: Response): void => {
+  ): (req: Request, res: Response) => Promise<void> {
+    return async (req: Request, res: Response): Promise<void> => {
       try {
-        const result = handler(req, res);
-        if (result instanceof Promise) {
-          result.catch(error => this.handleError(res, error as Error));
-        }
+        await handler(req, res);
       } catch (error) {
         const normalizedError = error instanceof Error ? error : new Error(String(error));
         logger.error('HTTP', 'Route handler error', { path: req.path }, normalizedError);

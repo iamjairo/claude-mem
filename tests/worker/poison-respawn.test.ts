@@ -84,7 +84,7 @@ describe('poison respawn (plan-11 #2485)', () => {
 
   it('respawns immediately on a poisoned closure string and preserves pending messages', async () => {
     const sm = new SessionManager(makeDbManager());
-    const session = sm.initializeSession(1, 'do the thing', 1);
+    const session = await sm.initializeSession(1, 'do the thing', 1);
     session.memorySessionId = 'mem-1';
 
     // Buffer two pending observations that must survive a respawn.
@@ -114,7 +114,7 @@ describe('poison respawn (plan-11 #2485)', () => {
 
   it('respawns only after N consecutive prose/idle outputs, not on the first', async () => {
     const sm = new SessionManager(makeDbManager());
-    const session = sm.initializeSession(2, 'do the thing', 1);
+    const session = await sm.initializeSession(2, 'do the thing', 1);
     session.memorySessionId = 'mem-2';
     await sm.queueObservation(2, {
       tool_name: 'Read', tool_input: {}, tool_response: {}, prompt_number: 1, toolUseId: 'tu-a',
@@ -142,7 +142,7 @@ describe('poison respawn (plan-11 #2485)', () => {
 
   it('respawnPoisonedSession preserves the buffer and resets context', async () => {
     const sm = new SessionManager(makeDbManager());
-    const session = sm.initializeSession(3, 'do the thing', 1);
+    const session = await sm.initializeSession(3, 'do the thing', 1);
     session.memorySessionId = 'mem-3';
     session.conversationHistory.push({ role: 'assistant', content: 'poisoned turn' });
     session.consecutiveInvalidOutputs = 5;

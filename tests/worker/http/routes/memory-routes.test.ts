@@ -25,9 +25,9 @@ function createMockReqRes(body: any): { req: Partial<Request>; res: Partial<Resp
   };
 }
 
-function captureChain(mockApp: any, targetPath: string): (req: Request, res: Response) => void {
+function captureChain(mockApp: any, targetPath: string): (req: Request, res: Response) => Promise<void> {
   let middleware: ((req: Request, res: Response, next: () => void) => void) | undefined;
-  let handler: ((req: Request, res: Response) => void) | undefined;
+  let handler: ((req: Request, res: Response) => Promise<void>) | undefined;
   mockApp.post = mock((path: string, ...rest: any[]) => {
     if (path !== targetPath) return;
     if (rest.length === 1) {
@@ -37,16 +37,16 @@ function captureChain(mockApp: any, targetPath: string): (req: Request, res: Res
       handler = rest[1];
     }
   });
-  return (req: Request, res: Response): void => {
+  return async (req: Request, res: Response): Promise<void> => {
     if (!middleware) {
-      handler!(req, res);
+      await handler!(req, res);
       return;
     }
     let nextCalled = false;
     middleware(req, res, () => {
       nextCalled = true;
     });
-    if (nextCalled) handler!(req, res);
+    if (nextCalled) await handler!(req, res);
   };
 }
 
@@ -88,7 +88,7 @@ describe('MemoryRoutes — POST /api/memory/save (#2116)', () => {
     mock.restore();
   });
 
-  function buildHandler(): (req: Request, res: Response) => void {
+  function buildHandler(): (req: Request, res: Response) => Promise<void> {
     const mockApp: any = {
       get: mock(() => {}),
       delete: mock(() => {}),
@@ -99,7 +99,7 @@ describe('MemoryRoutes — POST /api/memory/save (#2116)', () => {
     return handler;
   }
 
-  it('persists arbitrary metadata as JSON-encoded string', () => {
+  it('persists arbitrary metadata as JSON-encoded string', async () => {
     const handler = buildHandler();
     const metadata = {
       obsidian_note: 'Atom — Test',
@@ -107,51 +107,51 @@ describe('MemoryRoutes — POST /api/memory/save (#2116)', () => {
       custom_key: 'value',
     };
     const { req, res } = createMockReqRes({ text: 'hello', metadata });
-    handler(req as Request, res as Response);
+    await handler(req as Request, res as Response);
 
     expect(mockStoreObservation).toHaveBeenCalledTimes(1);
     const observationArg = storeObservationCalls[0][2];
     expect(observationArg.metadata).toBe(JSON.stringify(metadata));
   });
 
-  it('passes metadata: null when none provided', () => {
+  it('passes metadata: null when none provided', async () => {
     const handler = buildHandler();
     const { req, res } = createMockReqRes({ text: 'hello' });
-    handler(req as Request, res as Response);
+    await handler(req as Request, res as Response);
 
     const observationArg = storeObservationCalls[0][2];
     expect(observationArg.metadata).toBeNull();
   });
 
-  it('uses top-level project when present', () => {
+  it('uses top-level project when present', async () => {
     const handler = buildHandler();
     const { req, res } = createMockReqRes({
       text: 'hello',
       project: 'top-level-project',
       metadata: { project: 'metadata-project' },
     });
-    handler(req as Request, res as Response);
+    await handler(req as Request, res as Response);
 
     expect(mockGetOrCreateManualSession).toHaveBeenCalledWith('top-level-project');
     expect(storeObservationCalls[0][1]).toBe('top-level-project');
   });
 
-  it('falls back to metadata.project when top-level project is omitted (#2116)', () => {
+  it('falls back to metadata.project when top-level project is omitted (#2116)', async () => {
     const handler = buildHandler();
     const { req, res } = createMockReqRes({
       text: 'hello',
       metadata: { project: 'my-custom-project' },
     });
-    handler(req as Request, res as Response);
+    await handler(req as Request, res as Response);
 
     expect(mockGetOrCreateManualSession).toHaveBeenCalledWith('my-custom-project');
     expect(storeObservationCalls[0][1]).toBe('my-custom-project');
   });
 
-  it('falls back to defaultProject when no project supplied anywhere', () => {
+  it('falls back to defaultProject when no project supplied anywhere', async () => {
     const handler = buildHandler();
     const { req, res } = createMockReqRes({ text: 'hello' });
-    handler(req as Request, res as Response);
+    await handler(req as Request, res as Response);
 
     expect(mockGetOrCreateManualSession).toHaveBeenCalledWith('claude-mem');
     expect(storeObservationCalls[0][1]).toBe('claude-mem');
